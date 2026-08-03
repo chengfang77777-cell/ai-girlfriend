@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<style>
+*{margin:0;padding:0;overflow:hidden}
+body{background:transparent}
+canvas{display:block}
+#bg-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1}
+</style>
+</head><body>
+<canvas id="bg-canvas"></canvas>
+<script type="importmap">
+{"imports":{"three":"/js/three.module.js","three/addons/loaders/GLTFLoader.js":"/js/GLTFLoader.js","three/addons/controls/OrbitControls.js":"/js/OrbitControls.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from '/js/OrbitControls.js';
+import {GLTFLoader} from '/js/GLTFLoader.js';
+import {VRMLoaderPlugin} from '/js/three-vrm.module.js';
+import {VRMAnimationLoaderPlugin, createVRMAnimationClip} from '/js/three-vrm-animation.module.js';
+
+// ===== VRMA Animation System =====
+let _animationMixer = null;
+let _currentAction = null;
+let _currentAnimName = null;
+let _isAnimationPlaying = false;
+let _idleTimer = null;
+let _idleCount = 0;
+let _isGreetingDone = false;
+let _isInConversation = false;
+let _emotion = 'neutral';
+const _clipCache = {};
+// 平滑交叉淡入（smoothstep 缓动）相关
+const CROSSFADE = 0.6;        // 切换过渡时长（秒），复用最丝滑的 crossFadeFrom（略长更柔）
+let _idleCycleTimer = null;   // 待机变体插入计时器
+let _lastVariant = null;      // 上一次插入的待机变体，避免连续重复
+
+// Animation definitions
+const ANIMATIONS = {
+  greeting: 'Standing Greeting.vrma',
+  idle: 'idle.vrma',  // 主待机动作
+  idleVariants: ['Yawn.vrma', 'happy idle.vrma', 'Head Shake idle.vrma'],  // 变体待机动作
+  happy: ['happy idle.vrma'],  // 开心只用happy idle
+  clapping: 'clapping.vrma',  // 鼓掌专用
+  angry: ['angry.vrma'],
+  sad: ['sad idle.vrma'],
+  refuse: ['Shaking Head No.vrma'],
+  thankful: ['Thankful.vrma'],
+};
+
+// Emotion to expression mapping
+const EMOTION_EXPRESSIONS = {
+  happy: { happy: 0.55, sad: 0, angry: 0, surprised: 0 },
+  sad: { happy: 0, sad: 1.0, angry: 0, surprised: 0 },
+  angry: { happy: 0, sad: 0, angry: 1.0, surprised: 0 },
+  surprised: { happy: 0, sad: 0, angry: 0, surprised: 1.0 },
+  neutral: { happy: 0, sad: 0, angry: 0, surprised: 0 },
+  // 复合情绪：害羞=浅浅开心，感动=开心，拒绝=略不悦
+  shy: { happy: 0.3, sad: 0, angry: 0, surprised: 0 },
+  thankful: { happy: 0.55, sad: 0, angry: 0, surprised: 0 },
+  refuse: { happy: 0, sad: 0, angry: 0.4, surprised: 0 },
+};
+
+// Animation cache
+const _animationCache = {};
+
+async function loadAnimation(url) {
+  if (_animationCache[url]) {
+    return _animationCache[url];
+  }
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const buf = await res.arrayBuffer();
+    const gltf = await loader.parseAsync(buf, url);
+    if (gltf.userData && gltf.userData.vrmAnimations && gltf.userData.vrmAnimations.length > 0) {
+      _animationCache[url] = gltf.userData.vrmAnimations[0];
+      return gltf.userData.vrmAnimations[0];
+    }
+    return null;
+  } catch (e) {
+    console.error('[VRMA] Failed to load:', url, e);
+    return null;
+  }
+}
+
+// 加载并缓存某个动作的 THREE.Clip。
+// 对于非待机动作，会自动“注入”待机的手臂轨道：切换动作时手臂权重不再
+// 归零回落成张开的绑定(T-pose)姿势，从根上解决“双手突然张开一秒”的跳变。
+const ARM_HUMAN_BONES = ['leftShoulder','rightShoulder','leftUpperArm','rightUpperArm','leftLowerArm','rightLowerArm','leftHand','rightHand'];
+
+async function loadClip(animName) {
+  if (_clipCache[animName]) return _clipCache[animName];
+  const baseUrl = window._vrmBaseUrl || '';
+  const url = baseUrl + '/animations/' + animName;
+  const vrmAnim = await loadAnimation(url);
+  if (!vrmAnim) return null;
+  const clip = createVRMAnimationClip(vrmAnim, currentVrm);
+
+  if (animName !== ANIMATIONS.idle) {
+    const idleClip = await loadClip(ANIMATIONS.idle);
+    if (idleClip && currentVrm.humanoid) {
+      // 按“完整轨道名”判断覆盖：同一骨骼的旋转/位置轨道是独立的，
+      // 只按骨骼名判断会漏补（如缺 hips.position），切换时身体会被拉向旧姿势“扭一下”。
+      // 补缺后所有骨骼轨道在交叉淡入全程都有双方驱动、权重和恒 ≥1，
+      // 配合保持式交叉淡入，动作能完整播放且无缝衔接，无需任何“尾帧预对齐”。
+      const existing = new Set(clip.tracks.map(t => t.name));
+      const idleDur = idleClip.duration || 1;
+      const durScale = idleDur > 0 ? (clip.duration || idleDur) / idleDur : 1;
+      for (const t of idleClip.tracks) {
+        if (!existing.has(t.name)) {
+          const nt = t.clone();
+          nt.times = nt.times.map(x => x * durScale);
+          clip.tracks.push(nt);
+        }
+      }
+    }
+  }
+
+  _clipCache[animName] = clip;
+  return clip;
+}
+
+// ===== 动作切换：smoothstep 缓动交叉淡入 =====
+// THREE 内置 crossFadeFrom 是线性插值，开始/结束瞬间速度有突变；
+// 这里手动驱动权重，用 smoothstep 曲线（两端导数为0）让过渡如真人般渐入渐出。
+const _fades = [];
+function _startFade(action, from, to, dur, delay) {
+  for (let i = _fades.length - 1; i >= 0; i--) {
+    if (_fades[i].action === action) _fades.splice(i, 1); // 同一动作的旧淡变先移除
+  }
+  action.enabled = true;
+  action.setEffectiveWeight(from);
+  _fades.push({ action, from, to, t: -(delay || 0), dur });
+}
+function _updateFades(dt) {
+  for (let i = _fades.length - 1; i >= 0; i--) {
+    const f = _fades[i];
+    f.t += dt;
+    if (f.t < 0) continue; // 还在延迟期，权重保持 from
+    let k = f.dur > 0 ? Math.min(f.t / f.dur, 1) : 1;
+    k = k * k * (3 - 2 * k); // smoothstep 缓动
+    f.action.setEffectiveWeight(f.from + (f.to - f.from) * k);
+    if (f.t >= f.dur) {
+      if (f.to === 0) f.action.stop();
+      _fades.splice(i, 1);
+    }
+  }
+}
+
+async function playAnimation(animName, loop = false, onComplete = null, clamp = true) {
+  if (!currentVrm) return false;
+
+  const clip = await loadClip(animName);
+  if (!clip) {
+    console.error('[VRMA] Failed to load animation:', animName);
+    return false;
+  }
+
+  // 复用同一个 mixer，使动作之间可以交叉淡入淡出（自然平滑、无跳动）
+  const mixer = _animationMixer || (_animationMixer = new THREE.AnimationMixer(currentVrm.scene));
+  const prevAction = _currentAction;
+  const action = mixer.clipAction(clip);
+
+  // 同一段动作已经在播放（如待机循环），不重启以免跳动
+  if (prevAction === action) {
+    _currentAction = action;
+    _currentAnimName = animName;
+    _isAnimationPlaying = true;
+    return true;
+  }
+
+  action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce);
+  action.clampWhenFinished = clamp;  // 关键：动作播完“保持”最后一帧，避免双手回落张开（修复衔接跳变）
+  // 保持式交叉淡入：新动作先渐入(0→1)，原动作保持满权重，等新动作起来一半再渐出(1→0)。
+  // 全程权重和 ≥ 1，避免 THREE PropertyMixer 用绑定旧姿势（问候侧身）补齐差额导致“歪腰”。
+  action.reset();
+  action.setEffectiveWeight(0);
+  action.play();
+  _startFade(action, 0, 1, CROSSFADE, 0);
+  if (prevAction && prevAction !== action) {
+    _startFade(prevAction, 1, 0, CROSSFADE, CROSSFADE * 0.5);
+  }
+
+  _currentAction = action;
+  _currentAnimName = animName;
+  _isAnimationPlaying = true;
+
+  console.log('[VRMA] Started playing:', animName);
+
+  if (!loop && onComplete) {
+    const onFinished = () => {
+      mixer.removeEventListener('finished', onFinished);
+      console.log('[VRMA] Animation finished:', animName);
+      _isAnimationPlaying = false;
+      _currentAnimName = null;
+      onComplete();
+    };
+    mixer.addEventListener('finished', onFinished);
+  }
+
+  return true;
+}
+
+function stopAnimation() {
+  if (_currentAction) {
+    _currentAction.stop();
+    _currentAction = null;
+  }
+  _isAnimationPlaying = false;
+  _currentAnimName = null;
+}
+
+// 表情自动恢复中立：情绪表情展示几秒后自动回到 neutral，避免表情定格不动
+let _emotionResetTimer = null;
+function _scheduleEmotionReset(ms) {
+  if (_emotionResetTimer) { clearTimeout(_emotionResetTimer); _emotionResetTimer = null; }
+  _emotionResetTimer = setTimeout(() => {
+    _emotionResetTimer = null;
+    setEmotion('neutral');
+  }, ms || 5000);
+}
+function _cancelEmotionReset() {
+  if (_emotionResetTimer) { clearTimeout(_emotionResetTimer); _emotionResetTimer = null; }
+}
+
+// ===== 表情平滑过渡系统 =====
+// 情绪表情不再瞬时 setValue，而是设定目标值后在 animate 循环里逐帧指数趋近，
+// 收敛后释放该通道（交还给眨眼/微表情/口型系统），表情切换像真人一样渐变。
+const _exprLerp = {};        // key -> target
+const EXPR_LERP_SPEED = 3.0; // 指数趋近速度（约0.5s过渡完成）
+
+function _setExpressionTargets(map) {
+  const em = currentVrm && currentVrm.expressionManager;
+  if (!em) return;
+  for (const k of Object.keys(map)) {
+    // 只驱动模型真实拥有的表情通道，避免 three-vrm 报警告
+    if (em.expressionMap && !(k in em.expressionMap)) continue;
+    _exprLerp[k] = map[k];
+  }
+}
+
+function _updateExpressionLerp(dt) {
+  const em = currentVrm && currentVrm.expressionManager;
+  if (!em) return;
+  for (const k of Object.keys(_exprLerp)) {
+    const target = _exprLerp[k];
+    const cur = em.getValue(k) || 0;
+    const nv = cur + (target - cur) * Math.min(1, dt * EXPR_LERP_SPEED);
+    if (Math.abs(nv - target) < 0.015) {
+      em.setValue(k, target);
+      delete _exprLerp[k]; // 收敛，释放通道
+    } else {
+      em.setValue(k, nv);
+    }
+  }
+}
+
+function setEmotion(emotion) {
+  _emotion = emotion;
+  console.log('[VRMA] setEmotion called with:', emotion);
+  if (!currentVrm || !currentVrm.expressionManager) {
+    console.log('[VRMA] No VRM or expressionManager');
+    return;
+  }
+  const expr = EMOTION_EXPRESSIONS[emotion] || EMOTION_EXPRESSIONS.neutral;
+  // 已知情绪通道先平滑归零，再叠加目标表情（全程插值，无跳变）
+  _setExpressionTargets({ happy: 0, sad: 0, angry: 0, surprised: 0, shy: 0, blush: 0, ...expr });
+}
+
+async function startGreeting() {
+  await playAnimation(ANIMATIONS.greeting, false, () => {
+    _isGreetingDone = true;
+    startIdleTimer();
+  });
+}
+
+function startIdleTimer() {
+  if (_idleTimer) clearTimeout(_idleTimer);
+  // 如果在对话中，不启动待机计时器
+  if (_isInConversation) return;
+  _idleTimer = setTimeout(() => {
+    if (!_isAnimationPlaying && _isGreetingDone && !_isInConversation) {
+      playRandomIdle();
+    }
+  }, 10000); // 10 seconds
+}
+
+function stopIdleTimer() {
+  if (_idleTimer) {
+    clearTimeout(_idleTimer);
+    _idleTimer = null;
+  }
+}
+
+async function playIdleAnimation() {
+  // 主待机循环播放（LoopRepeat 无缝衔接），不在动作之间产生跳动
+  await playAnimation(ANIMATIONS.idle, true, null);
+  // 主待机播两次后，随机插入一个变体待机动作，再回到主待机
+  scheduleIdleVariant();
+}
+
+// 保留旧函数名兼容
+async function playRandomIdle() {
+  await playIdleAnimation();
+}
+
+// 主待机一次时长（用于“播两次”计时）
+async function getIdleDuration() {
+  const idleClip = await loadClip(ANIMATIONS.idle);
+  return (idleClip && idleClip.duration) ? idleClip.duration : 4;
+}
+
+function clearIdleCycleTimer() {
+  if (_idleCycleTimer) { clearTimeout(_idleCycleTimer); _idleCycleTimer = null; }
+}
+
+// 主待机播约两次后，安排插入一个随机变体待机
+function scheduleIdleVariant() {
+  clearIdleCycleTimer();
+  getIdleDuration().then((dur) => {
+    // 主待机播两次 ≈ 2 倍时长；加随机抖动更自然
+    const ms = dur * 2 * 1000 + 800 + Math.random() * 1500;
+    _idleCycleTimer = setTimeout(insertIdleVariant, ms);
+  });
+}
+
+// 插入一个随机变体待机（Yawn / happy idle / Head Shake idle），结束后回到主待机
+async function insertIdleVariant() {
+  // 仅在“纯主待机、无对话/无其他动作”时插入，避免打断情绪动作
+  if (_isInConversation || _currentAnimName !== ANIMATIONS.idle) {
+    scheduleIdleVariant();
+    return;
+  }
+  const variants = ANIMATIONS.idleVariants || [];
+  if (variants.length === 0) return;
+  // 随机选一个，尽量不与上一次重复
+  let pick = variants[Math.floor(Math.random() * variants.length)];
+  if (variants.length > 1 && pick === _lastVariant) {
+    pick = variants[(variants.indexOf(pick) + 1) % variants.length];
+  }
+  _lastVariant = pick;
+  console.log('[VRMA] Inserting idle variant:', pick);
+  // 播一次变体待机，结束后自动回到主待机（并重新计时）
+  await playAnimation(pick, false, () => {
+    playIdleAnimation();
+  }, true);
+}
+
+// 动作名 -> 动画文件 + 关联面部表情 的映射（按“动作名”触发身体动作）
+const ACTION_MAP = {
+  happy:      { anim: 'happy idle.vrma',        emotion: 'happy' },
+  sad:        { anim: 'sad idle.vrma',          emotion: 'sad' },
+  angry:      { anim: 'angry.vrma',             emotion: 'angry' },
+  refuse:     { anim: 'Shaking Head No.vrma',   emotion: 'neutral' },
+  shake_head: { anim: 'Shaking Head No.vrma',   emotion: 'neutral' },
+  thankful:   { anim: 'Thankful.vrma',          emotion: 'happy' },
+  clap:       { anim: 'clapping.vrma',          emotion: 'happy' },
+  clapping:   { anim: 'clapping.vrma',          emotion: 'happy' },
+  greeting:   { anim: 'Standing Greeting.vrma', emotion: 'happy' },
+  yawn:       { anim: 'Yawn.vrma',              emotion: 'neutral' },
+  // talk / 未知：不触发额外身体动作，仅保持待机 + 口型
+};
+
+// 按“动作名”触发身体动画（合理、不过度）：
+// - action 命中 ACTION_MAP 且有动画文件 -> 播放该动作，播完回到待机
+// - 未命中（talk / 未知）-> 不打断，保持待机与口型（避免每句话都“演”一下，太浮夸）
+// 面部表情由 Emotion（setExpression）驱动，这里只负责身体动作
+async function triggerAction(actionName, emotion) {
+  console.log('[VRMA] triggerAction called with:', actionName, 'emotion:', emotion);
+  if (!_isGreetingDone) {
+    console.log('[VRMA] Greeting not done yet, skipping');
+    return;
+  }
+  const key = (actionName || 'talk').toLowerCase();
+  const map = ACTION_MAP[key];
+  const faceEmotion = (emotion && EMOTION_EXPRESSIONS[emotion])
+    ? emotion
+    : (map ? map.emotion : 'neutral');
+
+  if (!map || !map.anim) {
+    // 无明确身体动作：保持待机与口型，表情短暂展示后自动回中立
+    console.log('[VRMA] No body action for:', key, '-> keep idle');
+    setEmotion(faceEmotion);
+    if (faceEmotion !== 'neutral') _scheduleEmotionReset();
+    return;
+  }
+
+  _isInConversation = true;
+  stopIdleTimer();
+  clearIdleCycleTimer();
+  _cancelEmotionReset(); // 动作期间由播完回调负责恢复表情，取消定时器
+  // 面部表情跟随身体动作（优先用调用方传入的 emotion，否则用映射里的情绪）
+  setEmotion(faceEmotion);
+
+  const anim = map.anim;
+  console.log('[VRMA] Playing body action:', anim);
+  // 情绪/身体动作交叉淡入；clampWhenFinished=true 让动作播完“保持”最后一帧，
+  // 在“结束事件→切回待机”的异步间隙里仍持续驱动手臂，不会回落成张开姿势。
+  // loadClip 已把动作手臂轨道首尾帧对齐到待机姿势，衔接无缝。
+  const ok = await playAnimation(anim, false, () => {
+    console.log('[VRMA] Body action done, back to idle');
+    setEmotion('neutral'); // 表情恢复中立
+    _isInConversation = false;
+    playIdleAnimation();   // 平滑交叉淡入回待机
+  }, true);
+  // VRMA 加载/播放失败时也要回到待机，避免模型卡在静止姿势
+  if (!ok) {
+    console.log('[VRMA] Body action failed, returning to idle');
+    setEmotion('neutral');
+    _isInConversation = false;
+    playIdleAnimation();
+  }
+}
+
+// 兼容旧入口：emotion 名直接当作 action 触发
+async function triggerEmotionAnimation(emotion) {
+  return triggerAction(emotion, emotion);
+}
+
+// 用户发送消息时调用，标记对话状态
+function onUserSendMessage() {
+  console.log('[VRMA] User sent message, entering conversation');
+  _isInConversation = true;
+  stopIdleTimer();
+  clearIdleCycleTimer();
+  // 注意：这里不再停掉待机动画。
+  // 之前 stopAnimation() 会让模型在 AI 思考期间定格，
+  // 重新播放情绪动画时就会出现“突然跳到预设静态姿势”的观感。
+  // 让待机动画继续播放，情绪动画到达时再无缝接管即可。
+}
+
+// 对话完成后调用
+function onConversationComplete() {
+  // 不立即设置为false，等动画播放完
+}
+
+// Expose functions to global scope
+window.playAnimation = playAnimation;
+window.stopAnimation = stopAnimation;
+window.setEmotion = setEmotion;
+window.triggerAction = triggerAction;
+window.triggerEmotionAnimation = triggerEmotionAnimation;
+window.startGreeting = startGreeting;
+window.onUserSendMessage = onUserSendMessage;
+window.onConversationComplete = onConversationComplete;
+
+// Unified message sender: supports both webview_flutter (window.flutter) and webview_windows (window.chrome.webview)
+function sendToFlutter(message) {
+  if (window.chrome && window.chrome.webview) {
+    // Windows: webview_windows package
+    window.chrome.webview.postMessage(message);
+  } else if (window.flutter) {
+    // Mobile: webview_flutter package
+    window.flutter.postMessage(message);
+  }
+}
+
+let scene,camera,renderer,controls,currentVrm,clock=new THREE.Clock();
+let _activeEmotion='neutral';
+window.window._isLipSyncPlaying = false;  // 全局变量，用于标记 lip-sync 是否在播放
+
+// Background system
+let _bgCanvas, _bgCtx, _bgParticles=[];
+let _currentBgType='stars';
+let _bgAnimFrame=0;
+
+// All bones that need to be tracked for smooth transitions
+// Excluding spine/chest/upperChest to keep character-specific defaults
+const _allBones=['leftUpperArm','rightUpperArm','leftLowerArm','rightLowerArm','leftHand','rightHand','head','neck','leftShoulder','rightShoulder','leftUpperLeg','rightUpperLeg','leftLowerLeg','rightLowerLeg','leftFoot','rightFoot'];
+
+// Pre-built pose library: all 5 user-defined poses for random switching
+function _buildPoseLibrary(){
+  if(!currentVrm?.humanoid)return;
+  const b=currentVrm.humanoid;
+  // Reset to T-pose first so we build poses from neutral state
+  _allBones.forEach(n=>{const node=b.getNormalizedBoneNode(n);if(node)node.rotation.set(0,0,0)});
+  const makePose=(deltas)=>{
+    // Start with all bones at zero (T-pose default)
+    const p={};
+    _allBones.forEach(n=>{p[n]={x:0,y:0,z:0}});
+    // Apply deltas on top
+    deltas.forEach(([n,dx,dy,dz])=>{
+      p[n]={x:dx,y:dy,z:dz};
+    });
+    return p;
+  };
+  _allPoses.push(makePose([['spine',-0.17,0,0],['leftShoulder',0,0.61,0.11],['leftUpperArm',0.55,0,0.68],['rightUpperArm',-0.32,0.75,-1.17],['leftLowerArm',-0.60,-0.03,1.47],['rightLowerArm',0.12,0.40,0.19],['leftHand',0.11,-0.31,-0.46],['rightHand',0.11,0.11,-0.24],['leftUpperLeg',-0.03,0.47,-0.10],['rightUpperLeg',0,0,0.11],['leftLowerLeg',0,0,-0.03],['rightLowerLeg',-0.32,0.40,0]]));
+  _allPoses.push(makePose([['neck',-0.10,0.11,-0.24],['leftShoulder',0.25,0.18,0.11],['leftUpperArm',0.55,1.11,0.40],['rightUpperArm',0.55,-1.31,-0.88],['leftLowerArm',0.12,0.68,0.26],['rightLowerArm',0.12,-0.67,0.11],['leftUpperLeg',0,0,0.04],['rightUpperLeg',0,0,-0.10],['rightLowerLeg',-0.82,0.11,-0.03],['rightFoot',-0.10,-0.10,0]]));
+  _allPoses.push(makePose([['head',-0.10,-0.03,0],['leftShoulder',0.75,-0.03,-0.03],['leftUpperArm',-0.25,-0.03,1.33],['rightUpperArm',0.82,-0.96,-1.17],['leftLowerArm',-0.17,-1.67,0.83],['rightLowerArm',-0.53,0.11,-1.74],['leftHand',0.82,0.04,1.04],['rightHand',-0.32,-0.10,-0.88],['leftUpperLeg',0,0.25,-0.03],['leftLowerLeg',-0.39,0,0.19],['leftFoot',0,0.18,0.04],['rightFoot',0,0.18,0]]));
+  _allPoses.push(makePose([['leftShoulder',0.54,0.25,-0.17],['leftUpperArm',-0.32,0.97,1.25],['rightUpperArm',-0.25,-0.67,-1.31],['leftLowerArm',-0.03,0.47,0],['rightLowerArm',0.82,-1.53,-0.17],['leftHand',-0.60,-0.10,0.04],['rightHand',0,0,-0.03],['leftUpperLeg',0,0.11,-0.10],['rightUpperLeg',0,-0.46,0.04],['leftLowerLeg',0,0.25,0.04],['rightLowerLeg',0,0.47,-0.10],['rightFoot',0,0,-0.24]]));
+  _allPoses.push(makePose([['neck',0,0,-0.17],['leftUpperArm',-0.39,-0.81,1.04],['rightShoulder',0,0,-0.10],['rightUpperArm',0.25,-0.60,-1.17],['leftLowerArm',0.96,-2.31,0.19],['rightLowerArm',0.12,0,0],['leftHand',0.54,-0.31,0.97],['rightUpperLeg',0,-0.03,-0.03],['rightLowerLeg',-0.53,0.04,0],['rightFoot',-0.32,0,-0.03]]));
+  _currentPoseIdx=0;
+}
+
+renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+scene=new THREE.Scene();
+scene.add(new THREE.AmbientLight(0xffffff,2.5));
+const dl=new THREE.DirectionalLight(0xffffff,2.0);dl.position.set(1,2,3);scene.add(dl);
+const rl=new THREE.DirectionalLight(0xffd1dc,1.5);rl.position.set(-1,1,-1);scene.add(rl);
+
+camera=new THREE.PerspectiveCamera(30,window.innerWidth/window.innerHeight,0.1,20);
+camera.position.set(0,1.45,2.5);camera.lookAt(0,1.4,0);
+
+// lookAt target follows camera so character always faces viewer
+const lookTarget=new THREE.Object3D();
+lookTarget.position.copy(camera.position);
+scene.add(lookTarget);
+
+controls=new OrbitControls(camera,renderer.domElement);
+controls.target.set(0,1.4,0);controls.enableDamping=true;controls.dampingFactor=0.08;
+controls.enableZoom=true;
+controls.minDistance=1.0;controls.maxDistance=4;controls.maxPolarAngle=Math.PI*0.6;
+controls.minPolarAngle=Math.PI*0.35;controls.update();
+
+// 缩放统一由 OrbitControls 处理（桌面滚轮 + 移动端双指捏合），无需自定义 wheel 监听
+
+const loader=new GLTFLoader();
+loader.register(p=>new VRMLoaderPlugin(p));
+loader.register(p=>new VRMAnimationLoaderPlugin(p));
+
+async function loadModel(path) {
+  if(currentVrm){scene.remove(currentVrm.scene);currentVrm=null;}
+  try{
+    const res=await fetch(path);
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const buf=await res.arrayBuffer();
+    const gltf=await loader.parseAsync(buf,path);
+    currentVrm=gltf.userData.vrm;
+    currentVrm.scene.rotation.y=Math.PI;
+
+    window.currentVrm = currentVrm;
+    if(path && path.includes('/')) window._vrmBaseUrl = path.substring(0, path.lastIndexOf('/'));
+
+    // 预加载问候动作（此刻模型尚未进入场景，不会渲染出 T-pose）
+    const greetingClip = await loadClip(ANIMATIONS.greeting);
+
+    // 初始化动画系统，并立即把问候首帧应用到骨骼，覆盖默认 T-pose
+    if (_animationMixer) _animationMixer.stopAllAction();
+    _animationMixer = new THREE.AnimationMixer(currentVrm.scene);
+    _currentAction = null;
+    _isGreetingDone = false;
+    _idleCount = 0;
+
+    const gAction = _animationMixer.clipAction(greetingClip);
+    gAction.reset();
+    gAction.setLoop(THREE.LoopOnce, 1);
+    gAction.clampWhenFinished = true;
+    gAction.enabled = true;
+    gAction.setEffectiveTimeScale(1);
+    gAction.setEffectiveWeight(1);
+    gAction.play();
+    _currentAction = gAction;
+    _animationMixer.update(0); // 应用问候首帧，避免闪 T-pose
+
+    // 现在才让模型进入场景，已经处于问候姿态
+    scene.add(currentVrm.scene);
+
+    // 等待物理模拟稳定（1000帧，让头发和裙子充分稳定，基于问候姿态）
+    for(let i=0; i<1000; i++){
+      currentVrm.update(1/60);
+    }
+
+    // 问候结束后直接进入待机（无 10 秒延迟）
+    const onGreet = () => {
+      _animationMixer.removeEventListener('finished', onGreet);
+      _isGreetingDone = true;
+      playIdleAnimation();
+    };
+    _animationMixer.addEventListener('finished', onGreet);
+
+    sendToFlutter('vrm_loaded');
+  }catch(e){
+    sendToFlutter('vrm_error:'+e.message);
+  }
+}
+
+// Alternative: load from ArrayBuffer
+async function loadModelFromBuffer(buffer) {
+  if(currentVrm){scene.remove(currentVrm.scene);currentVrm=null;}
+  try{
+    const gltf=await loader.parseAsync(buffer,'model.vrm');
+    currentVrm=gltf.userData.vrm;
+    currentVrm.scene.rotation.y=Math.PI;
+
+    // 预加载问候动作（此刻模型尚未进入场景，不会渲染出 T-pose）
+    const greetingClip = await loadClip(ANIMATIONS.greeting);
+
+    // 初始化动画系统，并立即把问候首帧应用到骨骼，覆盖默认 T-pose
+    _animationMixer = new THREE.AnimationMixer(currentVrm.scene);
+    _currentAction = null;
+    _isGreetingDone = false;
+
+    const gAction = _animationMixer.clipAction(greetingClip);
+    gAction.reset();
+    gAction.setLoop(THREE.LoopOnce, 1);
+    gAction.clampWhenFinished = true;
+    gAction.enabled = true;
+    gAction.setEffectiveTimeScale(1);
+    gAction.setEffectiveWeight(1);
+    gAction.play();
+    _currentAction = gAction;
+    _animationMixer.update(0); // 应用问候首帧，避免闪 T-pose
+
+    // 现在才让模型进入场景，已经处于问候姿态
+    scene.add(currentVrm.scene);
+
+    // 等待物理模拟稳定（1000帧，让头发和裙子充分稳定，基于问候姿态）
+    for(let i=0; i<1000; i++){
+      currentVrm.update(1/60);
+    }
+
+    // 问候结束后直接进入待机（无 10 秒延迟）
+    const onGreet = () => {
+      _animationMixer.removeEventListener('finished', onGreet);
+      _isGreetingDone = true;
+      playIdleAnimation();
+    };
+    _animationMixer.addEventListener('finished', onGreet);
+
+    sendToFlutter('vrm_loaded');
+  }catch(e){
+    sendToFlutter('vrm_error:'+e.message);
+  }
+}
+
+function _applyPose(){
+  if(!currentVrm||!currentVrm.humanoid)return;
+  const b=currentVrm.humanoid;
+  const c=window._characterName||'';
+
+  // Get bone — try normalized first, then raw
+  const bone=(name)=>{
+    let n=b.getNormalizedBoneNode(name);
+    if(!n)n=b.getRawBoneNode(name);
+    return n;
+  };
+
+  // Add rotation to existing
+  const add=(name,dx,dy,dz)=>{
+    const n=bone(name);
+    if(!n){console.warn('Bone not found:',name);return}
+    n.rotation.x+=dx;n.rotation.y+=dy;n.rotation.z+=dz;
+  };
+
+  // ===== 温柔学姐：完整自定义参数（不需要 base）=====
+  if(c.includes('温柔')||c.includes('学姐')){
+    add('spine',-0.17,0,0);
+    add('leftShoulder',0,0.61,0.11);
+    add('leftUpperArm',0.55,0,0.68); add('rightUpperArm',-0.32,0.75,-1.17);
+    add('leftLowerArm',-0.60,-0.03,1.47); add('rightLowerArm',0.12,0.40,0.19);
+    add('leftHand',0.11,-0.31,-0.46); add('rightHand',0.11,0.11,-0.24);
+    add('leftUpperLeg',-0.03,0.47,-0.10); add('rightUpperLeg',0,0,0.11);
+    add('leftLowerLeg',0,0,-0.03); add('rightLowerLeg',-0.32,0.40,0);
+  }
+  else if(c.includes('治愈')||c.includes('邻家')){
+    // 用户手动调参 — 治愈邻家
+    add('chest',0,-0.03,-0.03); add('upperChest',0.04,0,0);
+    add('neck',0,0,-0.17);
+    add('leftUpperArm',-0.39,-0.81,1.04); add('rightShoulder',0,0,-0.10);
+    add('rightUpperArm',0.25,-0.60,-1.17);
+    add('leftLowerArm',0.96,-2.31,0.19); add('rightLowerArm',0.12,0,0);
+    add('leftHand',0.54,-0.31,0.97);
+    add('rightUpperLeg',0,-0.03,-0.03);
+    add('rightLowerLeg',-0.53,0.04,0); add('rightFoot',-0.32,0,-0.03);
+  }
+  else if(c.includes('知性')||c.includes('御姐')){
+    // 用户手动调参 — 知性御姐
+    add('leftShoulder',0.54,0.25,-0.17);
+    add('leftUpperArm',-0.32,0.97,1.25); add('rightUpperArm',-0.25,-0.67,-1.31);
+    add('leftLowerArm',-0.03,0.47,0); add('rightLowerArm',0.82,-1.53,-0.17);
+    add('leftHand',-0.60,-0.10,0.04); add('rightHand',0,0,-0.03);
+    add('leftUpperLeg',0,0.11,-0.10); add('rightUpperLeg',0,-0.46,0.04);
+    add('leftLowerLeg',0,0.25,0.04); add('rightLowerLeg',0,0.47,-0.10);
+    add('rightFoot',0,0,-0.24);
+  }
+  else if(c.includes('傲娇')||c.includes('同桌')){
+    // 用户手动调参 — 傲娇同桌
+    add('head',-0.10,-0.03,0);
+    add('leftShoulder',0.75,-0.03,-0.03);
+    add('leftUpperArm',-0.25,-0.03,1.33); add('rightUpperArm',0.82,-0.96,-1.17);
+    add('leftLowerArm',-0.17,-1.67,0.83); add('rightLowerArm',-0.53,0.11,-1.74);
+    add('leftHand',0.72,-0.36,1.00); add('rightHand',-0.66,0.28,-0.90);
+    add('leftUpperLeg',0,0.25,-0.03); add('leftLowerLeg',-0.39,0,0.19);
+    add('leftFoot',0,0.18,0.04); add('rightFoot',0,0.18,0);
+    add('leftThumbProximal',0.00,0.28,0.30);
+    add('leftIndexProximal',0.00,0.00,0.20); add('leftIndexIntermediate',0.00,0.00,0.70);
+    add('leftMiddleProximal',0.00,0.00,0.20); add('leftMiddleIntermediate',0.00,0.00,0.70);
+    add('leftRingProximal',0.00,0.00,0.20); add('leftRingIntermediate',0.00,0.00,0.70);
+    add('leftLittleProximal',0.00,0.00,0.20); add('leftLittleIntermediate',0.00,0.00,0.70);
+    add('rightThumbProximal',0.00,-0.48,0.25); add('rightThumbDistal',0.00,-0.17,0.00);
+    add('rightIndexProximal',0.00,0.00,-0.20); add('rightIndexIntermediate',0.00,0.00,-0.70);
+    add('rightMiddleProximal',0.00,0.00,-0.20); add('rightMiddleIntermediate',0.00,0.00,-0.70);
+    add('rightRingProximal',0.00,0.00,-0.20); add('rightRingIntermediate',0.00,0.00,-0.70);
+    add('rightLittleProximal',0.00,0.00,-0.20); add('rightLittleIntermediate',0.00,0.00,-0.70);
+  }
+  else if(c.includes('活泼')||c.includes('青梅')||c.includes('蕾姆')||c.includes('拉姆')){
+    // 用户手动调参 — 活泼青梅/蕾姆/拉姆
+    add('neck',-0.10,0.11,-0.24);
+    add('leftShoulder',0.25,0.18,0.11);
+    add('leftUpperArm',0.55,1.11,0.40); add('rightUpperArm',0.55,-1.31,-0.88);
+    add('leftLowerArm',0.12,0.68,0.26); add('rightLowerArm',0.12,-0.67,0.11);
+    add('leftUpperLeg',0,0,0.04); add('rightUpperLeg',0,0,-0.10);
+    add('rightLowerLeg',-0.82,0.11,-0.03); add('rightFoot',-0.10,-0.10,0);
+  }
+  else {
+  // ===== BASE: arms naturally down (no T-pose) =====
+  add('leftUpperArm',  0.3, 0, -0.15);
+  add('rightUpperArm', 0.3, 0,  0.15);
+  add('leftLowerArm',  0.15, 0, 0.1);
+  add('rightLowerArm', 0.15, 0, -0.1);
+  add('leftHand',  0, 0, 0);
+  add('rightHand', 0, 0, 0);
+
+  } // end else (non-senpai characters)
+
+  // Natural posture
+  add('spine', 0.03, 0, 0);
+  add('head',  0.04, 0, 0);
+
+}
+
+// Smooth random pose transition — slerp from current to target, then snap
+function randomPose(){
+  if(_allPoses.length<2||!currentVrm?.humanoid)return;
+  let idx=_currentPoseIdx;
+  while(idx===_currentPoseIdx)idx=Math.floor(Math.random()*_allPoses.length);
+  _currentPoseIdx=idx;
+  const target=_allPoses[idx];
+  const b=currentVrm.humanoid;
+  // Save current quaternions for ALL bones (not just target bones)
+  _allBones.forEach(name=>{
+    const n=b.getNormalizedBoneNode(name);
+    if(n)_poseFromQ[name]=n.quaternion.clone();
+  });
+  _poseTo=target;
+  _poseT=0;
+}
+
+function _relaxPose(){_applyPose()}
+
+// Directly apply a random pose from library (no transition)
+function _applyRandomPoseImmediate(){
+  if(!currentVrm||!currentVrm.humanoid||_allPoses.length===0)return;
+  const idx=Math.floor(Math.random()*_allPoses.length);
+  _currentPoseIdx=idx;
+  const pose=_allPoses[idx];
+  const b=currentVrm.humanoid;
+  _allBones.forEach(name=>{
+    const n=b.getNormalizedBoneNode(name);
+    if(n&&pose[name]){
+      n.rotation.set(pose[name].x,pose[name].y,pose[name].z);
+    }
+  });
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  const dt=Math.min(clock.getDelta(),0.1);
+  const t=Date.now()*0.001;
+
+  // Update background animation
+  animateBackground();
+
+  if(currentVrm){
+    // Look at camera: target follows camera position
+    lookTarget.position.copy(camera.position);
+    if(currentVrm.lookAt)currentVrm.lookAt.target=lookTarget;
+
+    // Natural blinking (double-blink every 3-5 seconds)
+    const blinkCycle=t%4;
+    const blink=blinkCycle<0.15?Math.sin(blinkCycle/0.15*Math.PI):(blinkCycle>3.8&&blinkCycle<3.95?Math.sin((blinkCycle-3.8)/0.15*Math.PI)*0.7:0);
+    currentVrm.expressionManager?.setValue('blink',blink);
+
+    // Idle micro-expressions - 更自然的待机动画
+    if(_activeEmotion==='neutral'){
+      // 使用正弦波产生自然的微表情
+      const microT = t * 0.5;  // 放慢速度
+
+      // 微笑 - 更自然的波动（跳过正在被插值系统驱动的通道，避免互相打架、永不收敛）
+      if(!('happy' in _exprLerp)){
+        const smileWave = Math.sin(microT * 0.7) * 0.03 + 0.02;
+        currentVrm.expressionManager?.setValue('happy', smileWave);
+      }
+
+      // 微微惊讶 - 偶尔出现
+      if(!('surprised' in _exprLerp)){
+        const surpriseWave = Math.sin(microT * 0.3 + 1) > 0.8 ? 0.03 : 0;
+        currentVrm.expressionManager?.setValue('surprised', surpriseWave);
+      }
+
+      // 脸红 - 偶尔出现
+      if(!('blush' in _exprLerp)){
+        const blushWave = Math.sin(microT * 0.4 + 2) > 0.7 ? 0.04 : 0;
+        currentVrm.expressionManager?.setValue('blush', blushWave);
+      }
+
+      // 不设置 aa，避免待机时露牙齿
+    }
+
+    // 动作权重缓动 + 表情插值（丝滑过渡，须在 mixer.update 前设置权重）
+    _updateFades(dt);
+    _updateExpressionLerp(dt);
+
+    // Update animation mixer
+    if (_animationMixer) {
+      _animationMixer.update(dt);
+    }
+
+    currentVrm.update(dt);
+  }
+  renderer.render(scene,camera);
+}
+animate();
+
+window.addEventListener('resize',()=>{
+  camera.aspect=window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+});
+// Save default bone rotations so we can return to them
+let _defaultBoneRotations={};
+
+function _saveDefaultPose(){
+  if(!currentVrm?.humanoid)return;
+  const b=currentVrm.humanoid;
+  ['leftUpperArm','rightUpperArm','leftLowerArm','rightLowerArm','leftHand','rightHand','spine','head','neck','leftShoulder','rightShoulder','chest','upperChest','leftUpperLeg','rightUpperLeg','leftLowerLeg','rightLowerLeg','leftFoot','rightFoot']
+    .forEach(n=>{const node=b.getNormalizedBoneNode(n);if(node)_defaultBoneRotations[n]=node.rotation.clone()});
+}
+
+// Emotion-driven expression + body language
+function _updateEmotion(emotion){
+  if(!currentVrm)return;
+  const em=currentVrm.expressionManager;
+  const b=currentVrm.humanoid;
+  if(!em||!b)return;
+
+  // 1. Reset all expressions（平滑归零，交给插值系统逐帧过渡）
+  try {
+    if(em.expressionMap) {
+      const reset={};
+      if(typeof em.expressionMap.forEach==='function') {
+        em.expressionMap.forEach((_,k)=>{reset[k]=0});
+      } else if(typeof em.expressionMap==='object') {
+        for(const k of Object.keys(em.expressionMap)){reset[k]=0}
+      }
+      _setExpressionTargets(reset);
+    }
+  } catch(_) {}
+
+  // 2. Emotion: facial only — pose handled by randomPose, no bone changes（平滑到目标）
+  let on={};
+  switch(emotion){
+  case'happy': on={happy:0.55}; break;
+  case'shy': on={shy:1.0,blush:1.0}; break;
+  case'angry': on={angry:1.0}; break;
+  case'sad': on={sad:1.0}; break;
+  case'surprised': on={surprised:1.0}; break;
+  default: on={neutral:1.0}; break;
+  }
+  _setExpressionTargets(on);
+  _activeEmotion=emotion;
+  // 非中立表情展示几秒后自动恢复中立，避免表情定格不动
+  if(emotion&&emotion!=='neutral')_scheduleEmotionReset();
+}
+
+window.setExpression=(name,value)=>{
+  if(name==='_emotion'){
+    _updateEmotion(value);
+  }else{
+    currentVrm?.expressionManager?.setValue(name,value);
+  }
+};
+window.loadModel=loadModel;
+window.randomPose=randomPose;
+
+// Background system
+function initBackground() {
+  _bgCanvas = document.getElementById('bg-canvas');
+  _bgCtx = _bgCanvas.getContext('2d');
+  resizeBgCanvas();
+  window.addEventListener('resize', resizeBgCanvas);
+}
+
+function resizeBgCanvas() {
+  if (!_bgCanvas) return;
+  _bgCanvas.width = window.innerWidth;
+  _bgCanvas.height = window.innerHeight;
+}
+
+function setBackground(bgType) {
+  // Map full IDs to short types
+  const bgMap = {
+    'dreamy_starry': 'stars',
+    'sakura_falling': 'sakura',
+    'cozy_room': 'warm_glow',
+    'gradient_glow': 'glow',
+    'fresh_meadow': 'fireflies',
+    'sunset_dusk': 'sunrays',
+    'ice_world': 'snowflakes',
+    'mystic_night': 'nebula'
+  };
+
+  _currentBgType = bgMap[bgType] || bgType;
+  _bgParticles = [];
+  _bgAnimFrame = 0;
+
+  // Initialize particles based on type
+  const w = _bgCanvas.width;
+  const h = _bgCanvas.height;
+
+  switch(_currentBgType) {
+    case 'stars':
+      for (let i = 0; i < 100; i++) {
+        _bgParticles.push({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          size: Math.random() * 2 + 0.5,
+          opacity: Math.random(),
+          speed: Math.random() * 0.02 + 0.005
+        });
+      }
+      break;
+    case 'sakura':
+      for (let i = 0; i < 30; i++) {
+        _bgParticles.push({
+          x: Math.random() * w,
+          y: Math.random() * h - h,
+          size: Math.random() * 8 + 4,
+          rotation: Math.random() * Math.PI * 2,
+          speedX: Math.random() * 1 - 0.5,
+          speedY: Math.random() * 1 + 0.5,
+          rotSpeed: Math.random() * 0.02 - 0.01
+        });
+      }
+      break;
+    case 'fireflies':
+      for (let i = 0; i < 20; i++) {
+        _bgParticles.push({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          size: Math.random() * 4 + 2,
+          opacity: Math.random(),
+          speedX: Math.random() * 0.5 - 0.25,
+          speedY: Math.random() * 0.5 - 0.25,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+      break;
+    case 'snowflakes':
+      for (let i = 0; i < 50; i++) {
+        _bgParticles.push({
+          x: Math.random() * w,
+          y: Math.random() * h - h,
+          size: Math.random() * 3 + 1,
+          speedX: Math.random() * 0.5 - 0.25,
+          speedY: Math.random() * 0.5 + 0.3,
+          wobble: Math.random() * Math.PI * 2
+        });
+      }
+      break;
+    case 'glow':
+    case 'warm_glow':
+    case 'sunrays':
+    case 'nebula':
+      // Static effects, no particles needed
+      break;
+  }
+}
+
+function animateBackground() {
+  _bgAnimFrame++;
+  if (!_bgCtx || !_bgCanvas) return;
+
+  const w = _bgCanvas.width;
+  const h = _bgCanvas.height;
+  const ctx = _bgCtx;
+
+  // Clear
+  ctx.clearRect(0, 0, w, h);
+
+  // Draw gradient background based on type
+  switch(_currentBgType) {
+    case 'stars':
+      drawStarryBackground(ctx, w, h);
+      break;
+    case 'sakura':
+      drawSakuraBackground(ctx, w, h);
+      break;
+    case 'cozy_room':
+    case 'warm_glow':
+      drawWarmBackground(ctx, w, h);
+      break;
+    case 'gradient_glow':
+    case 'glow':
+      drawGradientGlow(ctx, w, h);
+      break;
+    case 'fresh_meadow':
+    case 'fireflies':
+      drawMeadowBackground(ctx, w, h);
+      break;
+    case 'sunset_dusk':
+    case 'sunrays':
+      drawSunsetBackground(ctx, w, h);
+      break;
+    case 'ice_world':
+    case 'snowflakes':
+      drawIceBackground(ctx, w, h);
+      break;
+    case 'mystic_night':
+    case 'nebula':
+      drawMysticBackground(ctx, w, h);
+      break;
+  }
+}
+
+function drawStarryBackground(ctx, w, h) {
+  // Dark gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#0F0C29');
+  grad.addColorStop(0.5, '#302B63');
+  grad.addColorStop(1, '#24243E');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Stars
+  _bgParticles.forEach(p => {
+    p.opacity += p.speed;
+    if (p.opacity > 1) p.opacity = 0;
+    const alpha = Math.sin(p.opacity * Math.PI);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.fill();
+  });
+}
+
+function drawSakuraBackground(ctx, w, h) {
+  // Pink gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#FFF0F5');
+  grad.addColorStop(0.5, '#FFE4E1');
+  grad.addColorStop(1, '#FFC0CB');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Sakura petals
+  _bgParticles.forEach(p => {
+    p.x += p.speedX;
+    p.y += p.speedY;
+    p.rotation += p.rotSpeed;
+
+    if (p.y > h + 20) {
+      p.y = -20;
+      p.x = Math.random() * w;
+    }
+    if (p.x < -20) p.x = w + 20;
+    if (p.x > w + 20) p.x = -20;
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rotation);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, p.size, p.size * 0.6, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 182, 193, 0.7)';
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
+function drawWarmBackground(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#FFF8DC');
+  grad.addColorStop(0.5, '#FFEFD5');
+  grad.addColorStop(1, '#FFE4C4');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Warm glow effect
+  const time = _bgAnimFrame * 0.01;
+  const glowX = w * 0.5 + Math.sin(time) * w * 0.1;
+  const glowY = h * 0.3 + Math.cos(time * 0.7) * h * 0.05;
+  const glowGrad = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, w * 0.4);
+  glowGrad.addColorStop(0, 'rgba(255, 200, 100, 0.15)');
+  glowGrad.addColorStop(1, 'rgba(255, 200, 100, 0)');
+  ctx.fillStyle = glowGrad;
+  ctx.fillRect(0, 0, w, h);
+}
+
+function drawGradientGlow(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, '#667eea');
+  grad.addColorStop(0.5, '#764ba2');
+  grad.addColorStop(1, '#f093fb');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Animated glow orbs
+  const time = _bgAnimFrame * 0.005;
+  for (let i = 0; i < 3; i++) {
+    const x = w * (0.3 + i * 0.2) + Math.sin(time + i * 2) * w * 0.1;
+    const y = h * (0.3 + i * 0.15) + Math.cos(time * 0.7 + i * 1.5) * h * 0.08;
+    const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, w * 0.25);
+    glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.1)');
+    glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+function drawMeadowBackground(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#E8F5E9');
+  grad.addColorStop(0.5, '#C8E6C9');
+  grad.addColorStop(1, '#A5D6A7');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Fireflies
+  const time = _bgAnimFrame * 0.02;
+  _bgParticles.forEach(p => {
+    p.x += p.speedX;
+    p.y += p.speedY;
+    p.phase += 0.03;
+
+    if (p.x < 0) p.x = w;
+    if (p.x > w) p.x = 0;
+    if (p.y < 0) p.y = h;
+    if (p.y > h) p.y = 0;
+
+    const alpha = (Math.sin(p.phase) + 1) * 0.3;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 150, ${alpha})`;
+    ctx.fill();
+
+    // Glow effect
+    const glowGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 3);
+    glowGrad.addColorStop(0, `rgba(255, 255, 150, ${alpha * 0.5})`);
+    glowGrad.addColorStop(1, 'rgba(255, 255, 150, 0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(p.x - p.size * 3, p.y - p.size * 3, p.size * 6, p.size * 6);
+  });
+}
+
+function drawSunsetBackground(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#FF6B6B');
+  grad.addColorStop(0.5, '#FF8E53');
+  grad.addColorStop(1, '#FFD93D');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Sun rays
+  const time = _bgAnimFrame * 0.005;
+  const centerX = w * 0.5;
+  const centerY = h * 0.8;
+
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 12) * Math.PI * 2 + time;
+    const length = w * 0.6;
+    const width = 3;
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(length, -width);
+    ctx.lineTo(length, width);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255, 255, 200, 0.1)';
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawIceBackground(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#E0F7FA');
+  grad.addColorStop(0.5, '#B2EBF2');
+  grad.addColorStop(1, '#80DEEA');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Snowflakes
+  _bgParticles.forEach(p => {
+    p.x += p.speedX + Math.sin(p.wobble) * 0.3;
+    p.y += p.speedY;
+    p.wobble += 0.02;
+
+    if (p.y > h + 10) {
+      p.y = -10;
+      p.x = Math.random() * w;
+    }
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.fill();
+  });
+}
+
+function drawMysticBackground(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#1A1A2E');
+  grad.addColorStop(0.5, '#16213E');
+  grad.addColorStop(1, '#0F3460');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Nebula effect
+  const time = _bgAnimFrame * 0.003;
+  for (let i = 0; i < 3; i++) {
+    const x = w * (0.2 + i * 0.3) + Math.sin(time + i * 1.5) * w * 0.1;
+    const y = h * (0.3 + i * 0.2) + Math.cos(time * 0.8 + i * 2) * h * 0.1;
+    const radius = w * 0.2;
+
+    const nebulaGrad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    nebulaGrad.addColorStop(0, `rgba(${100 + i * 50}, 50, ${150 + i * 30}, 0.15)`);
+    nebulaGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = nebulaGrad;
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+window.setBackground = setBackground;
+
+// Initialize background system
+initBackground();
+
+// Error logging
+window.onerror=(msg,src,line,col,err)=>{
+  sendToFlutter('vrm_error:JS:'+msg+' at '+src+':'+line);
+};
+window.addEventListener('unhandledrejection',e=>{
+  sendToFlutter('vrm_error:Promise:'+(e.reason?.message||e.reason));
+});
+
+// Send ready message after page is fully loaded
+function sendReady() {
+  console.log('VRM: Sending vrm_ready message');
+  sendToFlutter('vrm_ready');
+}
+
+// Wait for page load
+if (document.readyState === 'complete') {
+  setTimeout(sendReady, 500);
+} else {
+  window.addEventListener('load', () => setTimeout(sendReady, 500));
+}
+</script>
+
+<!-- LIP-SYNC SYSTEM (regular script, polls window.__pendingAudioUrl) -->
+<script>
+(function(){
+  var audioEl = null, audioCtx = null, analyser = null;
+  var lipInterval = null;
+  var _smoothOpen = 0;
+  // 使用全局变量 window._isLipSyncPlaying
+  // 平滑后的各viseme值
+  var _smoothAa = 0, _smoothIh = 0, _smoothOh = 0, _smoothOu = 0, _smoothEe = 0;
+
+  // 停止当前音频播放
+  function stopCurrentAudio() {
+    if (audioEl) {
+      try {
+        audioEl.pause();
+        audioEl.currentTime = 0;
+        audioEl.src = '';
+      } catch(e) {}
+    }
+    if (lipInterval) {
+      clearInterval(lipInterval);
+      lipInterval = null;
+    }
+    window._isLipSyncPlaying = false;
+    _smoothOpen = 0;
+    _smoothAa = 0;
+    _smoothIh = 0;
+    _smoothOh = 0;
+    _smoothOu = 0;
+    _smoothEe = 0;
+    var vrm = window.currentVrm;
+    if (vrm && vrm.expressionManager) {
+      ['aa', 'ih', 'ou', 'ee', 'oh'].forEach(function(k) {
+        try { vrm.expressionManager.setValue(k, 0); } catch(e) {}
+      });
+    }
+  }
+  window.stopCurrentAudio = stopCurrentAudio;
+
+  function playAudio(url){
+    try{
+      if(window._isLipSyncPlaying) return;
+      window._isLipSyncPlaying = true;
+
+      if(audioEl){ try{audioEl.pause(); audioEl.src='';}catch(e){} }
+      audioEl = new Audio(url);
+      audioEl.onended = function(){
+        window._isLipSyncPlaying = false;
+        if(lipInterval){ clearInterval(lipInterval); lipInterval=null; }
+        _smoothOpen = 0;
+        _smoothAa = 0; _smoothIh = 0; _smoothOh = 0; _smoothOu = 0; _smoothEe = 0;
+        var vrm = window.currentVrm;
+        if(vrm && vrm.expressionManager){
+          ['aa','ih','ou','ee','oh'].forEach(function(k){ try{vrm.expressionManager.setValue(k,0);}catch(e){} });
+        }
+      };
+      try{
+        if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        if(!analyser){ analyser = audioCtx.createAnalyser(); analyser.fftSize = 512; }
+        var mediaSrc = audioCtx.createMediaElementSource(audioEl);
+        mediaSrc.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      }catch(e){}
+
+      _smoothOpen = 0;
+      _smoothAa = 0; _smoothIh = 0; _smoothOh = 0; _smoothOu = 0; _smoothEe = 0;
+
+      lipInterval = setInterval(function(){
+        if(!analyser || !window.currentVrm) return;
+        var data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data);
+
+        var sampleRate = audioCtx.sampleRate;
+        var binSize = sampleRate / analyser.fftSize;
+        var n = data.length;
+
+        // ---- 1. 总响度 (RMS) ----
+        var sumSquares = 0;
+        for(var i=0;i<n;i++){ var v=data[i]/255; sumSquares += v*v; }
+        var rms = Math.sqrt(sumSquares / n);
+
+        // ---- 2. 频谱质心（音色明暗）与分频段能量 ----
+        var lowE=0, midE=0, highE=0;
+        var centNum=0, centDen=0;
+        for(var i=0;i<n;i++){
+          var freq=i*binSize;
+          var val=data[i]/255;
+          if(val<=0) continue;
+          centNum += freq*val; centDen += val;
+          if(freq<600){ lowE+=val; }
+          else if(freq<2500){ midE+=val; }
+          else { highE+=val; }
+        }
+        var centroid = centDen>0 ? centNum/centDen : 0;
+        // 归一化质心到 0..1（约 250Hz ~ 4000Hz），越大代表越“尖/靠前的元音”
+        var cen = Math.max(0, Math.min(1, (centroid-250)/(4000-250)));
+        var lowAvg = lowE/n, midAvg = midE/n, highAvg = highE/n;
+
+        // ---- 3. 门限与响度曲线 ----
+        var GATE = 0.018;
+        if(rms < GATE){
+          // 静音：自然快速闭合
+          var c = 0.55;
+          _smoothAa += (0-_smoothAa)*c;
+          _smoothIh += (0-_smoothIh)*c;
+          _smoothOh += (0-_smoothOh)*c;
+          _smoothOu += (0-_smoothOu)*c;
+          _smoothEe += (0-_smoothEe)*c;
+        } else {
+          // 感知响度：幂曲线压缩，弱音更柔、强音更张，更接近真人
+          var loud = Math.min(1, Math.pow(rms, 0.6) * 1.7);
+          // 轻微随机抖动，避免机械感
+          var jitter = (Math.random()-0.5) * 0.06 * loud;
+
+          // 元音权重：基于频谱质心连续混合（协同发音）
+          // 低频 -> 圆唇/后元音 ou/oh；中频 -> 开口 aa；高频 -> 前/闭元音 ih/ee
+          var wAa = loud * (1 - Math.min(1, Math.abs(cen-0.5)*2)) * 0.9;
+          var wOh = loud * Math.max(0, 0.45 - cen) * 1.5;
+          var wOu = loud * Math.max(0, 0.30 - cen) * 1.9;
+          var wIh = loud * Math.max(0, cen - 0.45) * 1.1;
+          var wEe = loud * Math.max(0, cen - 0.68) * 2.0;
+
+          // 攻击快、释放略慢且自然
+          var ATTACK = 0.75, RELEASE = 0.38;
+          var sm = function(prev, tgt){
+            var k = tgt>prev ? ATTACK : RELEASE;
+            return prev + (tgt-prev)*k;
+          };
+          _smoothAa = sm(_smoothAa, Math.max(0, wAa + jitter));
+          _smoothIh = sm(_smoothIh, Math.max(0, wIh + jitter*0.6));
+          _smoothOh = sm(_smoothOh, Math.max(0, wOh + jitter*0.5));
+          _smoothOu = sm(_smoothOu, Math.max(0, wOu + jitter*0.4));
+          _smoothEe = sm(_smoothEe, Math.max(0, wEe + jitter*0.6));
+        }
+
+        // ---- 4. 应用到 VRM 表情 ----
+        var vrm = window.currentVrm;
+        if(vrm && vrm.expressionManager){
+          try{
+            // 限制幅度，开口最大约 0.9 避免穿帮
+            vrm.expressionManager.setValue('aa',  Math.min(0.9, _smoothAa));
+            vrm.expressionManager.setValue('ih',  Math.min(0.85, _smoothIh));
+            vrm.expressionManager.setValue('oh',  Math.min(0.85, _smoothOh));
+            vrm.expressionManager.setValue('ou',  Math.min(0.8,  _smoothOu));
+            vrm.expressionManager.setValue('ee',  Math.min(0.85, _smoothEe));
+          }catch(e){}
+        }
+      }, 25);  // 更高的更新频率，口型更跟手
+      audioEl.play().catch(function(e){ window._isLipSyncPlaying = false; });
+    }catch(e){ window._isLipSyncPlaying = false; }
+  }
+
+  // Poll for audio filename from Flutter, construct full URL from _vrmBaseUrl
+  setInterval(function(){
+    if(window.__pendingAudioUrl){
+      var filename = window.__pendingAudioUrl;
+      window.__pendingAudioUrl = null;
+      var base = window._vrmBaseUrl || "";
+      var url = base + "/" + filename;
+      playAudio(url);
+    }
+  }, 100);
+})();
+</script>
+</body></html>
