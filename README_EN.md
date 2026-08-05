@@ -7,7 +7,7 @@
 ![Flutter](https://img.shields.io/badge/Flutter-3.2%2B-02569B?logo=flutter&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android%20%7C%20Web-blue)
 ![Language](https://img.shields.io/badge/Dart-3.2%2B-0175C2)
-![License](https://img.shields.io/badge/License-Unspecified-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
 **中文 README**: [README.md](./README.md)
 
@@ -39,6 +39,50 @@ An AI girlfriend app built with Flutter that deeply integrates **large language 
 
 ---
 
+## ⚙️ Core Implementation Details
+
+> 3D avatar rendering, lip-sync and action switching are all implemented in `assets/web/vrm_viewer.html` (three.js + @pixiv/three-vrm, running inside a built-in WebView).
+
+### 👄 Lip-Sync
+
+Lip-sync directly drives the VRM Viseme expression channels (`aa / ih / oh / ou / ee`) based on **Web Audio API spectrum analysis** — no third-party lip-sync library required:
+
+1. **Audio pipeline**: When Flutter plays TTS audio, the local shelf server hosts the audio file and sets the global `window.__pendingAudioUrl`; the page's JS polls it every 100ms and immediately creates an `<audio>` element to play.
+2. **Real-time spectrum analysis**: An `AnalyserNode` (`fftSize=512`) reads frequency-domain data every **25ms** (~40fps) so the mouth stays in sync.
+3. **Signal extraction**: Three metrics are computed per frame — overall RMS loudness, **spectral centroid** (timbre brightness, normalized to 250Hz–4000Hz), and band energies (low <600Hz / mid 600–2500Hz / high >2500Hz).
+4. **Phoneme-driven blending (coarticulation)**: The 5 Visemes are blended continuously along the spectral centroid axis — low frequencies bias `ou`/`oh` (rounded, back vowels), mid frequencies bias `aa` (open mouth), high frequencies bias `ih`/`ee` (front, close vowels) — approximating the continuous lip motion of real speech.
+5. **Perceptual loudness curve**: `pow(rms, 0.6) × 1.7` power compression keeps soft sounds softer and strong sounds more open; a silence gate of 0.018 closes the mouth quickly and naturally below it.
+6. **Smoothing & naturalness**: Asymmetric smoothing with attack 0.75 (fast) / release 0.38 (slow), plus ±0.06 random jitter to avoid a robotic feel; `aa` is clamped to 0.9 and the others to ≤0.85 to prevent over-acting.
+
+### 🎬 Smooth Action Switching System
+
+The action system achieves "buttery" transitions using a **shared THREE.AnimationMixer + manually driven weight easing**:
+
+1. **Shared mixer crossfade**: All VRMA clips share one `AnimationMixer`, so actions crossfade naturally without jumps.
+2. **smoothstep easing**: Instead of THREE's built-in linear `crossFadeFrom` (which has velocity discontinuities at start/end), weights are driven manually each frame with a smoothstep curve `k²(3−2k)` (zero derivative at both ends), completing in 0.6s for a human-like ease-in/out.
+3. **Hold-style crossfade**: The new action fades in (0→1) while the old one stays at full weight; only when the new one is ~halfway does the old fade out (1→0) — the weight sum is always ≥ 1, preventing THREE's PropertyMixer from filling the gap with the bind-pose (which caused a "tilting waist" artifact).
+4. **End-frame hold + arm-track injection**: `clampWhenFinished` keeps the last frame after a clip ends; when loading a non-idle clip, the 8 arm bone tracks from the idle clip are injected automatically, so arms never snap back to the T-pose during switching — eliminating the "arms suddenly spread for a second" jump.
+5. **Smart idle system**: The main `idle.vrma` loops continuously; roughly every two loops a random idle variant is inserted (yawn / happy idle / head-shake, with random jitter for naturalness) — only when no conversation or action is running, never interrupting emotional actions.
+6. **Expression lerp**: Emotions are not applied instantly; they exponentially approach targets per frame (~0.5s), then the channel is released once converged (handed back to the blink/micro-expression/lip-sync systems); non-neutral expressions auto-reset to neutral after 5s to avoid a frozen face.
+7. **Natural micro-details**: Double-blinks every 3–5s, plus sine-wave micro-expressions (smile/surprise/blush) while idle make the character feel alive.
+8. **No T-pose flash**: On model load, the greeting clip is preloaded and its first frame applied to the bones *before* the model enters the scene; after 1000 frames of physics simulation (so hair/skirt settle), it flows straight into idle.
+9. **Action semantic normalization**: The `action` field from DeepSeek is normalized against a controlled vocabulary (`talk / happy / sad / angry / refuse / thankful / clap / greeting / shake_head / yawn`); unknown values fall back to `talk` (idle + lip-sync only, no over-acting). `ACTION_MAP` maps action names to the matching VRMA file and associated expression.
+10. **Seamless conversation takeover**: Sending a message does **not** stop the idle animation (so the model never freezes while the AI "thinks"); when the emotion/action clip arrives it takes over seamlessly and crossfades back to idle when finished.
+
+### 🤖 AI Response Pipeline
+
+```
+User message
+  → DeepSeek deepseek-chat (sliding 30-turn context window)
+  → Parse structured JSON: { reply, emotion, action }
+  → Emotion correction (e.g. if the user is sad, the AI shouldn't be happy)
+  → Action inference (if the AI omits action, infer from keywords: thanks→thankful, clap→clap…)
+  → Trigger TTS (MiMo) → play audio + spectrum-driven lip-sync
+  → Expression exponential lerp + action smoothstep crossfade
+```
+
+---
+
 ## 🚀 Local Setup / Deployment
 
 ### Prerequisites
@@ -48,6 +92,13 @@ An AI girlfriend app built with Flutter that deeply integrates **large language 
 | [Flutter SDK](https://docs.flutter.dev/get-started/install) | ≥ 3.2.0 (Dart ≥ 3.2) | Core framework |
 | [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) | with "Desktop development with C++" workload | Build Windows desktop (Windows only) |
 | [Android Studio](https://developer.android.com/studio) / Android SDK | Latest stable | Build Android (optional) |
+
+> 💡 **Recommended Flutter version: 3.24.5** — it delivers smoother 3D character rendering and animation on Windows in our testing. Prefer this version. After installation, add Flutter's `bin` directory to your system PATH and run the commands below from the project root:
+>
+> ```bash
+> flutter --version      # verify it prints 3.24.5
+> flutter run -d windows
+> ```
 
 > You will need two API keys before deploying:
 > - **DeepSeek API Key** (chat): apply at [DeepSeek Platform](https://platform.deepseek.com/)
@@ -211,7 +262,9 @@ Thanks to all the developers and open-source projects contributing to the Flutte
 
 ## 📄 License
 
-The current repository does not declare an open-source license. **All assets remain the property of their respective authors**: VRM models belong to their creators on VRoid Hub, and VRMA animations belong to their makers. Please comply with each platform's terms of use (e.g., VRoid Hub's model usage terms and Adobe/Mixamo's [terms of use](https://www.adobe.com/legal/licenses-terms.html)).
+This project is licensed under the [MIT License](./LICENSE).
+
+**Note: the code and the bundled assets have different copyright holders** — the VRM models belong to their respective creators on VRoid Hub, and the VRMA animations belong to their makers; they are **not** covered by the MIT license. Please comply with each platform's terms of use (e.g., VRoid Hub's model usage terms and Adobe/Mixamo's [terms of use](https://www.adobe.com/legal/licenses-terms.html)), and verify asset licensing yourself before commercial use.
 
 ---
 

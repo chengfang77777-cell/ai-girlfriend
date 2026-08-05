@@ -7,7 +7,7 @@
 ![Flutter](https://img.shields.io/badge/Flutter-3.2%2B-02569B?logo=flutter&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android%20%7C%20Web-blue)
 ![Language](https://img.shields.io/badge/Dart-3.2%2B-0175C2)
-![License](https://img.shields.io/badge/License-Unspecified-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
 **English README**: [README_EN.md](./README_EN.md)
 
@@ -39,6 +39,50 @@
 
 ---
 
+## ⚙️ 核心实现原理
+
+> 3D 形象渲染、口型同步与动作切换全部实现在 `assets/web/vrm_viewer.html`（three.js + @pixiv/three-vrm，运行于内置 WebView 中）。
+
+### 👄 口型同步（Lip-Sync）
+
+基于 **Web Audio API 频谱分析** 直接驱动 VRM 的 Viseme 表情通道（`aa / ih / oh / ou / ee`），不依赖任何第三方口型库：
+
+1. **音频链路**：Flutter 播放 TTS 音频时，通过本地 shelf 服务器托管音频文件并设置全局变量 `window.__pendingAudioUrl`；页面 JS 每 100ms 轮询该变量，发现后立即创建 `<audio>` 元素播放。
+2. **实时频谱分析**：使用 `AnalyserNode`（`fftSize=512`）每 **25ms**（约 40fps）读取一次频域数据，保证口型跟手。
+3. **信号提取**：从频谱实时计算三项指标 —— 总响度 RMS、**频谱质心**（音色明暗，归一化到 250Hz~4000Hz）、分频段能量（低 <600Hz / 中 600~2500Hz / 高 >2500Hz）。
+4. **音素驱动（协同发音）**：以频谱质心为轴对 5 个 Viseme 做连续混合 —— 低频偏向 `ou`/`oh`（圆唇、后元音），中频偏向 `aa`（张大嘴），高频偏向 `ih`/`ee`（前、闭元音），近似真人发音时嘴唇的连续变化。
+5. **感知响度曲线**：`pow(rms, 0.6) × 1.7` 幂压缩，弱音更柔、强音更张；静音门限 0.018，低于门限嘴唇快速自然闭合。
+6. **平滑与自然化**：攻击系数 0.75（快）/ 释放系数 0.38（慢）的不对称平滑，叠加 ±0.06 随机抖动避免机械感；`aa` 幅度上限 0.9、其余 ≤0.85，防止"张不开嘴"或"过犹不及"。
+
+### 🎬 动作切换流畅系统
+
+动作系统基于 **统一的 THREE.AnimationMixer + 手动权重缓动** 实现"丝滑"的动作衔接：
+
+1. **统一 Mixer 交叉淡入**：所有 VRMA 动作共用一个 `AnimationMixer`，动作之间可以自然交叉淡入淡出，无跳变。
+2. **smoothstep 缓动**：不采用 THREE 内置的线性 `crossFadeFrom`（起止瞬间速度突变），而是每帧手动驱动动作权重，以 smoothstep 曲线 `k²(3−2k)`（两端导数为 0）过渡，0.6s 完成，如真人般渐入渐出。
+3. **保持式交叉淡入（Hold-style Crossfade）**：新动作先渐入（0→1），原动作保持满权重，等新动作起来约一半再渐出（1→0）——全程权重和 ≥ 1，避免 THREE PropertyMixer 用绑定旧姿势补齐差额导致"歪腰"。
+4. **末帧保持 + 手臂轨道注入**：`clampWhenFinished` 让动作播完"保持"最后一帧；加载非待机动作时自动注入待机动画的 8 条手臂骨骼轨道（肩膀→手指），切换瞬间手臂权重不会归零回落成 T-pose，彻底消除"双手突然张开一秒"的跳变。
+5. **智能待机系统**：主待机 `idle.vrma` 循环播放，每播约两次后随机插入一个变体待机（打哈欠 / 开心 / 摇头，带随机抖动更自然）；仅在无对话、无动作时插入，绝不打断情绪动作。
+6. **表情平滑插值**：情绪表情不瞬时切换，而是逐帧指数趋近目标值（约 0.5s 完成），收敛后自动释放该通道（交还给眨眼/微表情/口型系统）；情绪表情展示 5 秒后自动恢复中立，避免表情定格不动。
+7. **自然微细节**：每 3~5 秒的双眨眼、待机时的正弦波微笑 / 惊讶 / 脸红微表情，让角色"活"起来。
+8. **避免 T-pose 闪现**：加载模型时先预加载问候动作并把其首帧应用到骨骼，模型才进入场景；再经 1000 帧物理模拟让头发/裙子充分稳定，问候结束直接进入待机。
+9. **动作语义收敛**：DeepSeek 返回的 `action` 字段被收敛到受控词表（`talk / happy / sad / angry / refuse / thankful / clap / greeting / shake_head / yawn`），未知值回退为 `talk`（仅保持待机与口型，不过度"表演"）；由 `ACTION_MAP` 将动作名映射到对应 VRMA 文件与关联表情。
+10. **对话无缝接管**：用户发送消息时**不停止**待机动画（避免 AI 思考期间模型定格），情绪/动作动画到达时无缝接管，播完再平滑交叉淡入回待机。
+
+### 🤖 AI 响应处理流程
+
+```
+用户消息
+  → DeepSeek deepseek-chat（滑动窗口 30 轮上下文）
+  → 解析结构化 JSON：{ reply 回复文本, emotion 情绪, action 动作 }
+  → 情绪修正（根据用户语义：说难过时 AI 不该开心）
+  → 动作推断（AI 漏给 action 时按关键词语义推断：感谢→thankful、鼓掌→clap…）
+  → 触发 TTS 语音合成（MiMo）→ 播放音频 + 频谱驱动口型
+  → 表情指数插值过渡 + 动作 smoothstep 交叉淡入播放
+```
+
+---
+
 ## 🚀 本地部署
 
 ### 环境要求
@@ -48,6 +92,13 @@
 | [Flutter SDK](https://docs.flutter.dev/get-started/install) | ≥ 3.2.0（Dart ≥ 3.2） | 核心框架 |
 | [Visual Studio 2022](https://visualstudio.microsoft.com/zh-hans/downloads/) | 勾选「使用 C++ 的桌面开发」 | 构建 Windows 桌面版（仅 Windows 需要） |
 | [Android Studio](https://developer.android.com/studio) / Android SDK | 最新稳定版 | 构建 Android 版（可选） |
+
+> 💡 **推荐 Flutter 版本：3.24.5**。实测该版本在 Windows 上 3D 角色渲染与动画表现更流畅，建议优先安装使用。安装完成后将 Flutter 的 `bin` 目录加入系统 PATH，即可在项目目录下直接执行：
+>
+> ```bash
+> flutter --version      # 验证版本号应为 3.24.5
+> flutter run -d windows
+> ```
 
 > 部署前需准备两个 API Key：
 > - **DeepSeek API Key**（对话）：在 [DeepSeek 开放平台](https://platform.deepseek.com/) 申请
@@ -211,7 +262,9 @@ assets/
 
 ## 📄 许可证
 
-当前仓库暂未声明开源许可证（License）。**资源版权归原作者所有**：VRM 模型版权归 VRoid Hub 上的各模型作者，VRMA 动画版权归其制作者，请遵守各来源平台的用户协议（如 VRoid Hub 的模型使用条款、Mixamo 的 [用户协议](https://www.adobe.com/legal/licenses-terms.html)）。
+本项目采用 [MIT License](./LICENSE)。
+
+**注意：代码与内置素材的版权归属不同** —— VRM 模型版权归 VRoid Hub 上的各模型作者，VRMA 动画版权归其制作者，它们**不在 MIT 许可范围内**。请遵守各来源平台的用户协议（如 VRoid Hub 的模型使用条款、Mixamo 的 [用户协议](https://www.adobe.com/legal/licenses-terms.html)），商用前请自行确认素材授权。
 
 ---
 
