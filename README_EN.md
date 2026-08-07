@@ -111,6 +111,8 @@ Regarding the WeChat chat log, rest assured:
 | [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) | with "Desktop development with C++" workload | Build Windows desktop (Windows only) |
 | [Android Studio](https://developer.android.com/studio) / Android SDK | Latest stable | Build Android (optional) |
 
+> ⚠️ **Path requirement (important)**: Please place the project under a **pure ASCII path** (no Chinese characters, spaces, or other non-ASCII characters), e.g. `D:\ai_girlfriend`. Otherwise, on Windows you will hit `ShaderCompilerException` (Flutter's impellerc shader compiler cannot write to paths containing non-ASCII characters), causing `flutter build` / `flutter run` to fail.
+
 > 💡 **Recommended Flutter version: 3.24.5** — it delivers smoother 3D character rendering and animation on Windows in our testing. Prefer this version. After installation, add Flutter's `bin` directory to your system PATH and run the commands below from the project root:
 >
 > ```bash
@@ -127,8 +129,8 @@ Regarding the WeChat chat log, rest assured:
 #### 1. Clone the repository
 
 ```bash
-git clone https://gitee.com/chengfang77777/aigirlfriend.git
-cd aigirlfriend
+git clone https://github.com/chengfang77777-cell/ai-girlfriend.git
+cd ai-girlfriend
 ```
 
 #### 2. Configure API keys (required)
@@ -174,6 +176,10 @@ flutter build apk --release      # Android APK → build/app/outputs/flutter-apk
 ```
 
 > On first build, cache directories such as `build/`, `.dart_tool/`, and `windows/flutter/ephemeral/` are automatically regenerated — no manual setup needed.
+
+> 📱 **Ready-to-install APK**: After running `flutter build apk --release`, the artifact `build/app/outputs/flutter-apk/app-release.apk` is **an installable package that can be used directly on your phone** — just transfer this APK to your Android phone (via WeChat, cloud drive, USB, etc.) and tap to install. No Flutter environment needed.
+>
+> Pre-built release APKs are available on [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases).
 
 ---
 
@@ -288,7 +294,7 @@ This project is licensed under the [MIT License](./LICENSE).
 
 ## 📬 Contact
 
-- Repository: [https://gitee.com/chengfang77777/aigirlfriend](https://gitee.com/chengfang77777/aigirlfriend)
-- Issues & PRs are welcome: [Issue Tracker](https://gitee.com/chengfang77777/aigirlfriend/issues)
+- Repository: [https://github.com/chengfang77777-cell/ai-girlfriend](https://github.com/chengfang77777-cell/ai-girlfriend)
+- Issues & PRs are welcome: [Issue Tracker](https://github.com/chengfang77777-cell/ai-girlfriend/issues)
 
 If this project helps you, please give it a ⭐ Star. Thank you for your support!

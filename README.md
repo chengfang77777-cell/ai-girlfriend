@@ -111,6 +111,8 @@
 | [Visual Studio 2022](https://visualstudio.microsoft.com/zh-hans/downloads/) | 勾选「使用 C++ 的桌面开发」 | 构建 Windows 桌面版（仅 Windows 需要） |
 | [Android Studio](https://developer.android.com/studio) / Android SDK | 最新稳定版 | 构建 Android 版（可选） |
 
+> ⚠️ **路径要求（重要）**：请将项目放在**纯英文路径**下（不要包含中文、空格等非 ASCII 字符），例如 `D:\ai_girlfriend`。否则在 Windows 上编译时会遇到 `ShaderCompilerException`（Flutter 的 impellerc 着色器编译器无法写入含非 ASCII 字符的路径），导致 `flutter build` / `flutter run` 失败。
+
 > 💡 **推荐 Flutter 版本：3.24.5**。实测该版本在 Windows 上 3D 角色渲染与动画表现更流畅，建议优先安装使用。安装完成后将 Flutter 的 `bin` 目录加入系统 PATH，即可在项目目录下直接执行：
 >
 > ```bash
@@ -127,8 +129,8 @@
 #### 1. 克隆仓库
 
 ```bash
-git clone https://gitee.com/chengfang77777/aigirlfriend.git
-cd aigirlfriend
+git clone https://github.com/chengfang77777-cell/ai-girlfriend.git
+cd ai-girlfriend
 ```
 
 #### 2. 配置 API 密钥（必须）
@@ -174,6 +176,10 @@ flutter build apk --release      # 生成 Android APK：build/app/outputs/flutte
 ```
 
 > 首次构建会自动重建 `build/`、`.dart_tool/`、`windows/flutter/ephemeral/` 等缓存目录，无需手动创建。
+
+> 📱 **可直接安装的 APK**：执行 `flutter build apk --release` 后，产物 `build/app/outputs/flutter-apk/app-release.apk` 就是**可以直接在手机上使用的安装包** —— 将该 APK 文件传到 Android 手机（微信 / 网盘 / USB 等方式均可），点击即可安装使用，无需搭建 Flutter 环境。
+>
+> 已构建好的发布版 APK 请从 [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases) 下载。
 
 ---
 
@@ -288,7 +294,7 @@ assets/
 
 ## 📬 联系方式
 
-- 项目仓库：[https://gitee.com/chengfang77777/aigirlfriend](https://gitee.com/chengfang77777/aigirlfriend)
-- 欢迎提交 [Issue](https://gitee.com/chengfang77777/aigirlfriend/issues) 与 PR
+- 项目仓库：[https://github.com/chengfang77777-cell/ai-girlfriend](https://github.com/chengfang77777-cell/ai-girlfriend)
+- 欢迎提交 [Issue](https://github.com/chengfang77777-cell/ai-girlfriend/issues) 与 PR
 
 如果这个项目对你有帮助，欢迎点亮 ⭐ Star，谢谢支持！
