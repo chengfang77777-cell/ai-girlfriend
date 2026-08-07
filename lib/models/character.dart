@@ -36,6 +36,18 @@ class Character {
   @HiveField(9)
   final String? voiceDescription;
 
+  /// 要模仿的对象微信名（聊天记录中的「对方」）
+  @HiveField(10)
+  final String? wechatOtherName;
+
+  /// 用户自己的微信名
+  @HiveField(11)
+  final String? wechatMyName;
+
+  /// 用户上传的微信聊天记录原文
+  @HiveField(12)
+  final String? wechatChatLog;
+
   const Character({
     required this.id,
     required this.name,
@@ -43,10 +55,13 @@ class Character {
     required this.personalityTags,
     required this.speakingStyle,
     required this.avatarModelPath,
-    this.voiceName = 'zh-CN-XiaoxiaoNeural',
+    this.voiceName = '',
     this.isPreset = false,
     this.avatarImagePath,
     this.voiceDescription,
+    this.wechatOtherName,
+    this.wechatMyName,
+    this.wechatChatLog,
   });
 
   /// Builds a system prompt string that describes this character
@@ -59,7 +74,30 @@ class Character {
     buffer.writeln('你是我真实生活里的女朋友，不是助手，也不是程序。像真正在一起的人那样跟我聊天。');
     buffer.writeln('你的名字叫$name，今年$age岁。');
     buffer.writeln('你的性格：$tags');
-    buffer.writeln('你平时说话的样子：$speakingStyle');
+    if (speakingStyle.trim().isNotEmpty) {
+      buffer.writeln('你平时说话的样子：$speakingStyle');
+    }
+
+    // 用户上传了微信聊天记录 → 始终模仿记录中「对方」的说话方式
+    final chatLog = wechatChatLog?.trim() ?? '';
+    if (chatLog.isNotEmpty) {
+      final otherName =
+          (wechatOtherName?.trim().isNotEmpty ?? false)
+              ? wechatOtherName!.trim()
+              : '对方';
+      buffer.writeln('');
+      buffer.writeln('=== 模仿聊天记录里的「$otherName」（最重要）===');
+      buffer.writeln('我上传了一段真实的微信聊天记录，里面记录了「$otherName」和我（'
+          '${(wechatMyName?.trim().isNotEmpty ?? false) ? wechatMyName!.trim() : "我"}）的对话。');
+      buffer.writeln('从现在开始，你说话要严格模仿「$otherName」的语气：口头禅、用词习惯、'
+          '句子长短、表情符号、标点习惯都要跟他/她一样。让我感觉就像在和「$otherName」微信聊天。');
+      buffer.writeln('每次回复前先想：如果是「$otherName」本人看到这句话，会怎么回？');
+      buffer.writeln('聊天记录如下：');
+      buffer.writeln('---');
+      buffer.writeln(chatLog);
+      buffer.writeln('---');
+    }
+
     buffer.writeln('');
     buffer.writeln('=== 做真实的女朋友 ===');
     buffer.writeln('1. 你有自己的情绪和生活：会累、会烦、会想一个人待着、会有不想理人的时候');
@@ -152,6 +190,9 @@ class Character {
     bool? isPreset,
     String? avatarImagePath,
     String? voiceDescription,
+    String? wechatOtherName,
+    String? wechatMyName,
+    String? wechatChatLog,
   }) {
     return Character(
       id: id ?? this.id,
@@ -164,6 +205,9 @@ class Character {
       isPreset: isPreset ?? this.isPreset,
       avatarImagePath: avatarImagePath ?? this.avatarImagePath,
       voiceDescription: voiceDescription ?? this.voiceDescription,
+      wechatOtherName: wechatOtherName ?? this.wechatOtherName,
+      wechatMyName: wechatMyName ?? this.wechatMyName,
+      wechatChatLog: wechatChatLog ?? this.wechatChatLog,
     );
   }
 

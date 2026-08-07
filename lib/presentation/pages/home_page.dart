@@ -191,10 +191,19 @@ class _HomePageState extends ConsumerState<HomePage> {
 
         final autoPlay = ref.read(autoPlayVoiceProvider);
         if (autoPlay) {
-          final voice = character.voiceName.isNotEmpty
+          // MiMo TTS 支持的有效语音名（与设置页一致）
+          const supportedVoices = {'冰糖', '茉莉'};
+          final settingVoice = ref.read(storageServiceProvider)
+                  .getSetting<String>('tts_voice') ??
+              '冰糖';
+          final rawVoice = character.voiceName.isNotEmpty
               ? character.voiceName
-              : ref.read(storageServiceProvider)
-                  .getSetting<String>('tts_voice') ?? '冰糖';
+              : settingVoice;
+          // 兜底：历史数据可能存过无效语音名（如 zh-CN-XiaoxiaoNeural），
+          // 或自定义角色未设置有效语音时，回退到设置里的语音
+          final voice = supportedVoices.contains(rawVoice)
+              ? rawVoice
+              : settingVoice;
           final voiceDescription = character.voiceDescription;
           // 过滤掉括号内容后再TTS
           final filteredContent = _filterBrackets(aiMessage.content);

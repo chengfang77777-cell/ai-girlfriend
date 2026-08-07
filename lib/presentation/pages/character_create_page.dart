@@ -20,6 +20,10 @@ class _CharacterCreatePageState
   late TextEditingController _ageController;
   late TextEditingController _styleController;
   late TextEditingController _voiceDescController;
+  // 微信聊天记录模仿相关（保存到角色，主界面对话时持续模仿对方）
+  late TextEditingController _otherWechatNameController;
+  late TextEditingController _myWechatNameController;
+  late TextEditingController _chatLogController;
   final Set<String> _selectedTraits = {};
 
   bool get _isEditing => widget.editingCharacter != null;
@@ -55,6 +59,12 @@ class _CharacterCreatePageState
         TextEditingController(text: char?.speakingStyle ?? '');
     _voiceDescController =
         TextEditingController(text: char?.voiceDescription ?? '');
+    _otherWechatNameController =
+        TextEditingController(text: char?.wechatOtherName ?? '');
+    _myWechatNameController =
+        TextEditingController(text: char?.wechatMyName ?? '');
+    _chatLogController =
+        TextEditingController(text: char?.wechatChatLog ?? '');
     if (char != null) {
       _selectedTraits.addAll(char.personalityTags);
       // 从已有角色的 modelPath 提取文件名
@@ -73,6 +83,9 @@ class _CharacterCreatePageState
     _ageController.dispose();
     _styleController.dispose();
     _voiceDescController.dispose();
+    _otherWechatNameController.dispose();
+    _myWechatNameController.dispose();
+    _chatLogController.dispose();
     super.dispose();
   }
 
@@ -104,6 +117,9 @@ class _CharacterCreatePageState
     final age = int.tryParse(_ageController.text.trim()) ?? 18;
     final style = _styleController.text.trim();
     final voiceDesc = _voiceDescController.text.trim();
+    final otherName = _otherWechatNameController.text.trim();
+    final myName = _myWechatNameController.text.trim();
+    final chatLog = _chatLogController.text.trim();
 
     final character = Character(
       id: widget.editingCharacter?.id ?? _generateId(),
@@ -114,6 +130,9 @@ class _CharacterCreatePageState
       avatarModelPath: 'assets/models/$_selectedModel',
       isPreset: false,
       voiceDescription: voiceDesc.isNotEmpty ? voiceDesc : null,
+      wechatOtherName: otherName.isNotEmpty ? otherName : null,
+      wechatMyName: myName.isNotEmpty ? myName : null,
+      wechatChatLog: chatLog.isNotEmpty ? chatLog : null,
     );
 
     if (_isEditing) {
@@ -329,11 +348,11 @@ class _CharacterCreatePageState
               ),
             const SizedBox(height: 24),
 
-            // Speaking style
+            // Speaking style (可选)
             TextFormField(
               controller: _styleController,
               decoration: const InputDecoration(
-                labelText: '说话风格',
+                labelText: '说话风格（可选）',
                 hintText: '描述角色说话的方式和语气...',
                 prefixIcon: Icon(Icons.record_voice_over),
                 alignLabelWithHint: true,
@@ -341,14 +360,21 @@ class _CharacterCreatePageState
               maxLines: 4,
               minLines: 2,
               validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请描述角色的说话风格';
-                }
-                if (value.trim().length > 500) {
+                if (value != null && value.trim().length > 500) {
                   return '描述不能超过500个字符';
                 }
                 return null;
               },
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(
+                '可选。留空则由 AI 根据性格标签和聊天记录自然发挥',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.outline,
+                    ),
+              ),
             ),
             const SizedBox(height: 24),
 
@@ -378,6 +404,92 @@ class _CharacterCreatePageState
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: colorScheme.outline,
                     ),
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // 微信聊天风格模仿
+            Card(
+              elevation: 0,
+              color: colorScheme.surfaceContainerHighest.withOpacity(0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.chat_bubble_outline,
+                            color: colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Text(
+                          '微信聊天风格模仿',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '可选。粘贴你和对方的微信聊天记录，创建角色后，她在主界面和你聊天时会一直模仿聊天记录中这个人的语气',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: colorScheme.outline,
+                          ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _otherWechatNameController,
+                            decoration: const InputDecoration(
+                              labelText: '对方微信名',
+                              hintText: '要模仿的人',
+                              prefixIcon: Icon(Icons.person_outline),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _myWechatNameController,
+                            decoration: const InputDecoration(
+                              labelText: '我的微信名',
+                              hintText: '你自己',
+                              prefixIcon: Icon(Icons.person),
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _chatLogController,
+                      decoration: const InputDecoration(
+                        labelText: '聊天记录',
+                        hintText: '示例：\n我：在干嘛呢\n小美：刚下班，累死了\n我：晚上一起吃饭？\n小美：行啊，你来接我',
+                        alignLabelWithHint: true,
+                      ),
+                      maxLines: 7,
+                      minLines: 5,
+                    ),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        '留空则按普通方式聊天；填写后她会用聊天记录里「对方微信名」的口吻和你对话',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 32),

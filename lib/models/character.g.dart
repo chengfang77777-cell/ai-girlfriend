@@ -27,13 +27,16 @@ class CharacterAdapter extends TypeAdapter<Character> {
       isPreset: fields[7] as bool,
       avatarImagePath: fields[8] as String?,
       voiceDescription: fields[9] as String?,
+      wechatOtherName: fields[10] as String?,
+      wechatMyName: fields[11] as String?,
+      wechatChatLog: fields[12] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Character obj) {
     writer
-      ..writeByte(10)
+      ..writeByte(13)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -53,7 +56,13 @@ class CharacterAdapter extends TypeAdapter<Character> {
       ..writeByte(8)
       ..write(obj.avatarImagePath)
       ..writeByte(9)
-      ..write(obj.voiceDescription);
+      ..write(obj.voiceDescription)
+      ..writeByte(10)
+      ..write(obj.wechatOtherName)
+      ..writeByte(11)
+      ..write(obj.wechatMyName)
+      ..writeByte(12)
+      ..write(obj.wechatChatLog);
   }
 
   @override
@@ -80,10 +89,13 @@ Character _$CharacterFromJson(Map<String, dynamic> json) => Character(
           .toList(),
       speakingStyle: json['speakingStyle'] as String,
       avatarModelPath: json['avatarModelPath'] as String,
-      voiceName: json['voiceName'] as String? ?? 'zh-CN-XiaoxiaoNeural',
+      voiceName: json['voiceName'] as String? ?? '',
       isPreset: json['isPreset'] as bool? ?? false,
       avatarImagePath: json['avatarImagePath'] as String?,
       voiceDescription: json['voiceDescription'] as String?,
+      wechatOtherName: json['wechatOtherName'] as String?,
+      wechatMyName: json['wechatMyName'] as String?,
+      wechatChatLog: json['wechatChatLog'] as String?,
     );
 
 Map<String, dynamic> _$CharacterToJson(Character instance) => <String, dynamic>{
@@ -97,4 +109,7 @@ Map<String, dynamic> _$CharacterToJson(Character instance) => <String, dynamic>{
       'isPreset': instance.isPreset,
       'avatarImagePath': instance.avatarImagePath,
       'voiceDescription': instance.voiceDescription,
+      'wechatOtherName': instance.wechatOtherName,
+      'wechatMyName': instance.wechatMyName,
+      'wechatChatLog': instance.wechatChatLog,
     };

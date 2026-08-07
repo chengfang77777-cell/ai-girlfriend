@@ -33,7 +33,8 @@ An AI girlfriend app built with Flutter that deeply integrates **large language 
 | 🔊 **Text-to-Speech (TTS)** | Xiaomi MiMo `mimo-v2.5-tts` with preset voices 「冰糖」「茉莉」and an auto-read toggle |
 | 🎨 **Custom Voice** | Design your own voice by text description via `mimo-v2.5-tts-voicedesign` |
 | 👧 **Preset Characters** | 7 distinct characters: Gentle Senpai, Cheerful Childhood Friend, Tsundere Deskmate, Elegant Onee-san, Healing Neighbor, Ram, Rem |
-| 🧑‍🎨 **Custom Characters** | Freely create characters: set name, age, personality tags, speaking style, and bind your own VRM model and voice |
+| 🧑‍🎨 **Custom Characters** | Freely create characters: set name, age, personality tags, speaking style (optional), and bind your own VRM model and voice |
+| 🗨️ **WeChat Style Mimicry** | Paste a real WeChat chat log (with the other person's WeChat name and yours) when creating a character — the character will **always mimic the "other person's" tone** in conversation: catchphrases, wording habits, sentence length, emojis and punctuation, just like chatting with the real person |
 | 💾 **Local Storage** | Based on Hive, persists characters, chat history (up to 5,000 messages per character) and settings — all data stays local |
 | 🖼️ **Chat Backgrounds** | Multiple gradient backgrounds, each character has a default background |
 
@@ -80,6 +81,23 @@ User message
   → Trigger TTS (MiMo) → play audio + spectrum-driven lip-sync
   → Expression exponential lerp + action smoothstep crossfade
 ```
+
+### 🗨️ WeChat Style Mimicry
+
+When creating a custom character, you can paste a real WeChat chat log and fill in the **other person's WeChat name** and **your own WeChat name**. These are persisted with the character (Hive) and injected into DeepSeek as part of the **system prompt** for every conversation:
+
+- The system prompt explicitly instructs the AI to speak in the "other person's" tone from the log: catchphrases, wording habits, sentence length, emoji and punctuation habits — making the chat feel like messaging that real person.
+- Characters without a chat log chat normally.
+- The **speaking style** field is **optional**; when left blank, the AI improvises based on personality tags and the chat log.
+
+#### 🔒 Privacy & Data Storage
+
+Regarding the WeChat chat log, rest assured:
+
+- **Stored locally only**: The chat log, the other person's WeChat name and your own name are saved only in the app's local Hive database (the `characters` box, located in the system's app-data directory). They are **never uploaded to any cloud or third-party storage**; they are removed when the app is uninstalled or its data is cleared.
+- **Sent to DeepSeek only during conversation**: To let the AI learn the other person's tone, the chat log is included as part of the system prompt **when you chat with that character**, and sent to the official DeepSeek API (`api.deepseek.com`), which analyzes the style and returns a reply. This is the only network request required for the feature to work.
+- **No other use**: The chat log is never sent to any service other than DeepSeek (MiMo TTS only receives the reply text to be read aloud, never the chat log), and is never used in any logs, statistics or feedback reporting.
+- **Deletable with the character**: Deleting the character in "Character Management" also removes its chat log from the local database.
 
 ---
 
