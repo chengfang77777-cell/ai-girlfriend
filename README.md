@@ -179,7 +179,7 @@ flutter build apk --release      # 生成 Android APK：build/app/outputs/flutte
 
 > 📱 **可直接安装的 APK**：执行 `flutter build apk --release` 后，产物 `build/app/outputs/flutter-apk/app-release.apk` 就是**可以直接在手机上使用的安装包** —— 将该 APK 文件传到 Android 手机（微信 / 网盘 / USB 等方式均可），点击即可安装使用，无需搭建 Flutter 环境。
 >
-> 已构建好的发布版 APK 请从 [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases) 下载。
+> 已构建好的发布版 APK 在build/app/outputs/flutter-apk文件夹中，可单独下载在手机上试用。
 
 ---
 
