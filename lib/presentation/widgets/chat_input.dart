@@ -36,7 +36,7 @@ class _ChatInputState extends State<ChatInput> {
 
   @override
   void dispose() {
-    _controller.removeListener(() {});
+    // _controller.dispose() 会自行清理已注册的 listener，无需手动移除
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();

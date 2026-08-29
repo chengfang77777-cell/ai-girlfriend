@@ -64,11 +64,24 @@ class StorageService {
     }
 
     // 预配置 DeepSeek API Key
-    // 若本地未配置，或仍是旧的无效默认 key，则写入当前内置 key
-    const legacyDefaultApiKey = 'sk-d6b641052e6f4d2fb37e4dfdbd396854';
+    // 仅当本地尚未配置时，才写入 secrets.dart 中的内置 key
+    // （secrets.dart 已被 .gitignore 忽略，不会随仓库提交，避免密钥泄露）
     final storedApiKey = getSetting<String?>(AppConstants.apiKeyKey);
-    if (storedApiKey == null || storedApiKey == legacyDefaultApiKey) {
-      await setSetting(AppConstants.apiKeyKey, Secrets.deepseekApiKey);
+    if (storedApiKey == null || storedApiKey.isEmpty) {
+      const builtinKey = Secrets.deepseekApiKey;
+      if (builtinKey.isNotEmpty) {
+        await setSetting(AppConstants.apiKeyKey, builtinKey);
+      }
+    }
+
+    // 预配置 MiMo TTS API Key
+    // 仅当本地尚未配置时，才写入 secrets.dart 中的内置 key
+    final storedMimoApiKey = getSetting<String?>(AppConstants.mimoApiKeyKey);
+    if (storedMimoApiKey == null || storedMimoApiKey.isEmpty) {
+      const builtinMimoKey = Secrets.mimoApiKey;
+      if (builtinMimoKey.isNotEmpty) {
+        await setSetting(AppConstants.mimoApiKeyKey, builtinMimoKey);
+      }
     }
 
     debugPrint('StorageService initialized successfully');
@@ -154,6 +167,12 @@ class StorageService {
     _messageCache.remove(characterId);
   }
 
+  /// 清空所有角色的聊天记录（清空 messages Box 与内存缓存）
+  Future<void> clearAllMessages() async {
+    await _messagesBox.clear();
+    _messageCache.clear();
+  }
+
   /// 清理超过容量上限的旧消息
   Future<void> _trimMessageHistory(String characterId) async {
     final messages = getMessages(characterId);
@@ -220,6 +239,7 @@ class StorageService {
 
   // 便捷访问器
   String? get apiKey => getSetting<String?>(AppConstants.apiKeyKey);
+  String? get mimoApiKey => getSetting<String?>(AppConstants.mimoApiKeyKey);
   bool get autoPlayVoice =>
       getSetting<bool>(AppConstants.autoPlayKey, defaultValue: true) ?? true;
   String? get currentCharacterId =>

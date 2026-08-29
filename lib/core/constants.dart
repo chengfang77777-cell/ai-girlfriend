@@ -8,6 +8,15 @@ class AppConstants {
   static const String deepseekModel = 'deepseek-chat';
   static const int apiTimeout = 30;
 
+  // MiMo Chat(文本) API configuration
+  // 官方文档：https://mimo.mi.com/docs/zh-CN/quick-start/summary/model（2026-07-15 更新）
+  // V2 系列（mimo-v2-pro / flash）已于 2026-06-30 下线，当前文本模型为 v2.5 系列
+  static const String mimoBaseUrl = 'https://api.xiaomimimo.com';
+  static const String mimoChatModel = 'mimo-v2.5';
+
+  // 对话模型供应商选择（值为 LlmProvider.deepseek / LlmProvider.mimo 的 id）
+  static const String llmProviderKey = 'llm_provider';
+
   // Message limits
   static const int maxMessagesPerCharacter = 5000;
   static const int contextWindowSize = 30;
@@ -29,7 +38,9 @@ class AppConstants {
   // SharedPreferences / Hive keys
   static const String currentCharKey = 'current_character_id';
   static const String apiKeyKey = 'deepseek_api_key';
+  static const String mimoApiKeyKey = 'mimo_api_key';
   static const String autoPlayKey = 'auto_play_voice';
+  static const String backgroundKey = 'background_id';
 
   // Default values
   static const String defaultGreeting = '你终于来啦～等你好久了呢！今天想聊什么呢？';

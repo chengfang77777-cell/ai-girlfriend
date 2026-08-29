@@ -25,6 +25,7 @@ class _CharacterCreatePageState
   late TextEditingController _myWechatNameController;
   late TextEditingController _chatLogController;
   final Set<String> _selectedTraits = {};
+  bool _isSaving = false;
 
   bool get _isEditing => widget.editingCharacter != null;
 
@@ -104,6 +105,7 @@ class _CharacterCreatePageState
   }
 
   Future<void> _saveCharacter() async {
+    if (_isSaving) return; // 防止重复提交
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedTraits.isEmpty) {
@@ -112,6 +114,8 @@ class _CharacterCreatePageState
       );
       return;
     }
+
+    setState(() => _isSaving = true);
 
     final name = _nameController.text.trim();
     final age = int.tryParse(_ageController.text.trim()) ?? 18;
@@ -135,12 +139,26 @@ class _CharacterCreatePageState
       wechatChatLog: chatLog.isNotEmpty ? chatLog : null,
     );
 
-    if (_isEditing) {
-      await ref.read(characterNotifierProvider.notifier).updateCharacter(character);
-    } else {
-      await ref.read(characterNotifierProvider.notifier).addCharacter(character);
-      // Set the newly created character as current
-      ref.read(currentCharacterIdProvider.notifier).state = character.id;
+    try {
+      if (_isEditing) {
+        await ref.read(characterNotifierProvider.notifier).updateCharacter(character);
+      } else {
+        await ref.read(characterNotifierProvider.notifier).addCharacter(character);
+        // Set the newly created character as current
+        ref.read(currentCharacterIdProvider.notifier).state = character.id;
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('保存失败，请重试'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
 
     if (!mounted) return;
@@ -496,17 +514,23 @@ class _CharacterCreatePageState
 
             // Save button
             FilledButton(
-              onPressed: () => _saveCharacter(),
+              onPressed: _isSaving ? null : () => _saveCharacter(),
               style: FilledButton.styleFrom(
                 minimumSize: const Size(double.infinity, 56),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
               ),
-              child: Text(
-                _isEditing ? '保存修改' : '创建角色',
-                style: const TextStyle(fontSize: 18),
-              ),
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
+                    )
+                  : Text(
+                      _isEditing ? '保存修改' : '创建角色',
+                      style: const TextStyle(fontSize: 18),
+                    ),
             ),
           ],
         ),

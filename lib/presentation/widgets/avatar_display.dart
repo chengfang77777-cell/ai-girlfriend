@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -69,6 +70,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
   static HttpServer? _server;
   static int _port = 0;
   bool _modelLoadStarted = false;
+  StreamSubscription<dynamic>? _webMessageSub;
 
   /// Public accessors so parent can send JS commands to the WebView
   WebviewController? get windowsController => _windowsCtrl;
@@ -221,7 +223,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           return;
         }
 
-        _windowsCtrl!.webMessage.listen((message) {
+        _webMessageSub = _windowsCtrl!.webMessage.listen((message) {
           debugPrint('VRM: Message from Windows WebView: $message');
           if (message == 'vrm_loaded') {
             debugPrint('VRM: Model loaded successfully!');
@@ -303,6 +305,19 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       debugPrint('VRM: Error initializing: $e');
       setState(() { _loadFailed = true; _lastError = e.toString(); });
     }
+  }
+
+  @override
+  void dispose() {
+    _webMessageSub?.cancel();
+    _windowsCtrl?.dispose();
+    // webview_flutter 的 WebViewController 无公开 dispose，随 widget 销毁即可
+    // 关闭本地 HTTP 服务器（单实例场景；重新进入页面时 _initVRM 会重新创建）
+    if (_server != null) {
+      _server!.close(force: true);
+      _server = null;
+    }
+    super.dispose();
   }
 
   @override

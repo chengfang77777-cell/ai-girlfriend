@@ -22,11 +22,14 @@ final autoPlayVoiceProvider = StateProvider<bool>((ref) {
 
 class VoiceNotifier extends StateNotifier<bool> {
   final TtsService _tts;
-  StreamSubscription? _sub;
+  Timer? _stateResetTimer;
 
   /// Set by home_page.dart to forward audio to the VRM viewer for lip-sync.
   /// When null, lip-sync is skipped (e.g. on platforms without WebView).
   LipSyncAudioSender? lipSyncSender;
+
+  /// TTS 合成失败/异常时的回调（由 home_page 设置，用于向用户弹出提示）
+  void Function(String message)? onTtsError;
 
   VoiceNotifier(this._tts) : super(false);
 
@@ -35,6 +38,8 @@ class VoiceNotifier extends StateNotifier<bool> {
     String? voice,
     String? voiceDescription,
   }) async {
+    // 取消上一次未完成的计时器，避免多个计时器叠加导致状态被提前复位
+    _stateResetTimer?.cancel();
     state = true;
     try {
       Uint8List? bytes;
@@ -58,18 +63,18 @@ class VoiceNotifier extends StateNotifier<bool> {
         // Don't use Flutter's AudioPlayer — the WebView plays the audio
         // via AudioContext, which is synchronized with the lip-sync analysis.
         // Just track state with a timer based on audio duration.
-        _sub?.cancel();
-        _sub = null;
         // Estimate duration based on WAV size (16-bit mono 16kHz = 32000 bytes/sec)
         final estimatedDur = Duration(milliseconds: max(2000, bytes.length * 1000 ~/ 32000));
-        Future.delayed(estimatedDur, () {
+        _stateResetTimer = Timer(estimatedDur, () {
           state = false;
         });
       } else {
         state = false;
+        onTtsError?.call('语音合成失败，请检查网络或 MiMo API Key');
       }
     } catch (e) {
       state = false;
+      onTtsError?.call('语音合成异常，请稍后重试');
     }
   }
 
@@ -96,7 +101,8 @@ class VoiceNotifier extends StateNotifier<bool> {
 
   void stop() {
     _tts.stop();
-    _sub?.cancel();
+    _stateResetTimer?.cancel();
+    _stateResetTimer = null;
     state = false;
   }
 }

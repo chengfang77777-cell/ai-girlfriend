@@ -40,7 +40,6 @@ class _ChatBubbleState extends State<ChatBubble>
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
-  bool _deleted = false;
 
   @override
   void initState() {
@@ -111,7 +110,7 @@ class _ChatBubbleState extends State<ChatBubble>
         );
         widget.onCopy?.call();
       } else if (value == 'delete') {
-        setState(() => _deleted = true);
+        // 由上层数据源负责删除并刷新列表，避免本地状态与数据源不同步导致消息闪现
         widget.onDelete?.call();
       }
     });
@@ -119,10 +118,6 @@ class _ChatBubbleState extends State<ChatBubble>
 
   @override
   Widget build(BuildContext context) {
-    if (_deleted) {
-      return const SizedBox.shrink();
-    }
-
     final isUser = widget.type == MessageType.user;
     final screenWidth = MediaQuery.of(context).size.width;
     final maxBubbleWidth = screenWidth * 0.75;

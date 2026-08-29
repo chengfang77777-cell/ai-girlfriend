@@ -28,6 +28,9 @@ class CharacterCard extends StatefulWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
 
+  /// 清除该角色聊天记录（预设角色与自定义角色都可提供）
+  final VoidCallback? onClearChat;
+
   const CharacterCard({
     super.key,
     required this.name,
@@ -38,10 +41,14 @@ class CharacterCard extends StatefulWidget {
     this.onTap,
     this.onEdit,
     this.onDelete,
+    this.onClearChat,
   });
 
   /// Whether this card is for a preset character (no edit/delete)
   bool get isPreset => onEdit == null && onDelete == null;
+
+  /// Whether the card should show an action menu (edit / clear chat / delete)
+  bool get _hasMenu => onEdit != null || onDelete != null || onClearChat != null;
 
   @override
   State<CharacterCard> createState() => _CharacterCardState();
@@ -62,6 +69,36 @@ class _CharacterCardState extends State<CharacterCard> {
 
   void _handleTapCancel() {
     setState(() => _isPressed = false);
+  }
+
+  void _showClearChatConfirmation() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text('清除聊天记录'),
+        content: Text(
+            '确定要清除与"${widget.name}"的全部聊天记录吗？\n此操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              widget.onClearChat?.call();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.orange,
+            ),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showDeleteConfirmation() {
@@ -129,8 +166,8 @@ class _CharacterCardState extends State<CharacterCard> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Action menu (only for non-preset cards)
-              if (!widget.isPreset)
+              // Action menu (shown when the card provides any action)
+              if (widget._hasMenu)
                 _buildActionMenu()
               else
                 const SizedBox(height: 4),
@@ -161,32 +198,48 @@ class _CharacterCardState extends State<CharacterCard> {
         onSelected: (value) {
           if (value == 'edit') {
             widget.onEdit?.call();
+          } else if (value == 'clear') {
+            _showClearChatConfirmation();
           } else if (value == 'delete') {
             _showDeleteConfirmation();
           }
         },
         itemBuilder: (context) => [
-          PopupMenuItem<String>(
-            value: 'edit',
-            child: Row(
-              children: [
-                Icon(Icons.edit_outlined, size: 18, color: Colors.grey[600]),
-                const SizedBox(width: 8),
-                const Text('编辑'),
-              ],
+          if (widget.onEdit != null)
+            PopupMenuItem<String>(
+              value: 'edit',
+              child: Row(
+                children: [
+                  Icon(Icons.edit_outlined, size: 18, color: Colors.grey[600]),
+                  const SizedBox(width: 8),
+                  const Text('编辑'),
+                ],
+              ),
             ),
-          ),
-          PopupMenuItem<String>(
-            value: 'delete',
-            child: Row(
-              children: [
-                Icon(Icons.delete_outline,
-                    size: 18, color: Colors.red[400]),
-                const SizedBox(width: 8),
-                const Text('删除', style: TextStyle(color: Colors.red)),
-              ],
+          if (widget.onClearChat != null)
+            PopupMenuItem<String>(
+              value: 'clear',
+              child: Row(
+                children: [
+                  Icon(Icons.chat_bubble_outline,
+                      size: 18, color: Colors.orange[400]),
+                  const SizedBox(width: 8),
+                  const Text('清除聊天记录'),
+                ],
+              ),
             ),
-          ),
+          if (widget.onDelete != null)
+            PopupMenuItem<String>(
+              value: 'delete',
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline,
+                      size: 18, color: Colors.red[400]),
+                  const SizedBox(width: 8),
+                  const Text('删除', style: TextStyle(color: Colors.red)),
+                ],
+              ),
+            ),
         ],
         child: Padding(
           padding: const EdgeInsets.all(4),

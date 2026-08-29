@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/constants.dart';
+import '../../models/message.dart';
 import '../../domain/character_provider.dart';
 import '../../domain/chat_provider.dart';
 import '../../domain/voice_provider.dart';
@@ -92,6 +94,13 @@ class _HomePageState extends ConsumerState<HomePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final voiceNotifier = ref.read(voiceNotifierProvider.notifier);
       voiceNotifier.lipSyncSender = _sendAudioToLipSync;
+      voiceNotifier.onTtsError = (message) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message)),
+          );
+        }
+      };
     });
   }
 
@@ -99,7 +108,9 @@ class _HomePageState extends ConsumerState<HomePage> {
   void dispose() {
     _scrollController.dispose();
     _inputController.dispose();
-    ref.read(voiceNotifierProvider.notifier).lipSyncSender = null;
+    final voiceNotifier = ref.read(voiceNotifierProvider.notifier);
+    voiceNotifier.lipSyncSender = null;
+    voiceNotifier.onTtsError = null;
     super.dispose();
   }
 
@@ -170,6 +181,16 @@ class _HomePageState extends ConsumerState<HomePage> {
       return;
     }
 
+    // 未配置 API Key 时给出明确引导，而不是发消息后无响应
+    final api = ref.read(llmApiProvider);
+    if (api == null) {
+      final providerName = ref.read(llmProviderProvider).name;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('请先在「设置」中配置 $providerName API Key')),
+      );
+      return;
+    }
+
     ref.read(isSendingProvider.notifier).state = true;
     _scrollToBottom(force: true);
 
@@ -194,8 +215,8 @@ class _HomePageState extends ConsumerState<HomePage> {
           // MiMo TTS 支持的有效语音名（与设置页一致）
           const supportedVoices = {'冰糖', '茉莉'};
           final settingVoice = ref.read(storageServiceProvider)
-                  .getSetting<String>('tts_voice') ??
-              '冰糖';
+                  .getSetting<String>(AppConstants.ttsVoiceKey) ??
+              AppConstants.defaultVoice;
           final rawVoice = character.voiceName.isNotEmpty
               ? character.voiceName
               : settingVoice;
@@ -216,8 +237,20 @@ class _HomePageState extends ConsumerState<HomePage> {
       }
     } catch (e) {
       if (mounted) {
+        // 将底层异常映射为友好提示，避免把原始堆栈/响应体直接展示给用户
+        final err = e.toString();
+        String tip;
+        if (err.contains('认证') || err.contains('401')) {
+          tip = 'API Key 无效或已过期，请在设置中检查';
+        } else if (err.contains('超时') || err.contains('Timeout')) {
+          tip = '请求超时，请检查网络后重试';
+        } else if (err.contains('客户端') || err.contains('Client')) {
+          tip = '网络连接异常，请检查网络后重试';
+        } else {
+          tip = '发送失败，请稍后重试';
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('发送失败: $e')),
+          SnackBar(content: Text(tip)),
         );
       }
     } finally {
@@ -227,6 +260,47 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
 
     _scrollToBottom(force: true);
+  }
+
+  /// 清除当前角色的聊天记录（带二次确认，仅影响该角色）
+  Future<void> _showClearChatConfirmation() async {
+    final character = ref.read(currentCharacterProvider);
+    if (character == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text('清除聊天记录'),
+        content: Text(
+          '确定要清除与"${character.name}"的全部聊天记录吗？\n'
+          '仅清除该角色的对话，其他角色的记录不受影响。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    await ref.read(chatNotifierProvider.notifier).clearChat(character.id);
+    ref.read(messageRefreshProvider.notifier).state++;
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已清除与"${character.name}"的聊天记录')),
+    );
   }
 
   void _notifyUserSendMessage() {
@@ -305,11 +379,16 @@ class _HomePageState extends ConsumerState<HomePage> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottomIfNeeded());
     }
 
-    // Get current emotion from last AI message
-    final lastAiMsg = messages.where((m) => m.role == 'assistant').toList();
-    final currentEmotion = lastAiMsg.isNotEmpty
-        ? _parseEmotion(lastAiMsg.last.emotion)
-        : Emotion.happy;
+    // Get current emotion from the last AI message（倒查，避免全量遍历构造中间 List）
+    Message? lastAiMsg;
+    for (final m in messages.reversed) {
+      if (m.role == 'assistant') {
+        lastAiMsg = m;
+        break;
+      }
+    }
+    final currentEmotion =
+        lastAiMsg != null ? _parseEmotion(lastAiMsg.emotion) : Emotion.happy;
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -334,6 +413,20 @@ class _HomePageState extends ConsumerState<HomePage> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.3),
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.delete_sweep_outlined,
+                  color: Colors.white),
+              onPressed:
+                  character == null ? null : _showClearChatConfirmation,
+              tooltip: '清除聊天记录',
+            ),
+          ),
           Container(
             margin: const EdgeInsets.only(right: 6),
             decoration: BoxDecoration(

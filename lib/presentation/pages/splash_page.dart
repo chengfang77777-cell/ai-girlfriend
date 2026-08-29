@@ -38,9 +38,8 @@ class _SplashPageState extends State<SplashPage>
       ),
     );
 
-    _controller.forward();
-
-    Future.delayed(const Duration(seconds: 3), () {
+    // 动画播放完成后立即进入主界面，不再固定等待 3 秒
+    _controller.forward().whenComplete(() {
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const HomePage()),
@@ -90,7 +89,6 @@ class _SplashPageState extends State<SplashPage>
                   duration: const Duration(milliseconds: 150),
                   curve: Curves.easeInOut,
                   builder: (context, value, child) => Transform.scale(scale: value, child: child),
-                  onEnd: () => setState(() {}),
                   child: const Icon(Icons.favorite, size: 80, color: Colors.white),
                 ),
                 const SizedBox(height: 24),

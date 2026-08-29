@@ -5,8 +5,9 @@ import 'package:flutter/foundation.dart';
 import '../core/constants.dart';
 import '../models/character.dart';
 import '../models/message.dart';
+import 'llm_provider.dart';
 
-/// DeepSeek Chat API 封装
+/// OpenAI 兼容 Chat API 封装（默认 DeepSeek，可通过 [provider] 切换到小米 MiMo）
 ///
 /// 架构设计要点：
 /// 1. 连接池管理：复用HTTP客户端减少连接开销
@@ -14,8 +15,16 @@ import '../models/message.dart';
 /// 3. 滑动窗口上下文：自动管理历史消息数量
 /// 4. 错误重试机制：指数退避策略
 /// 5. JSON Mode：结构化响应解析
+///
+/// 提示词构建（system prompt、上下文窗口）与回复后处理（情绪/动作修正、
+/// 括号清理、JSON 解析）对**所有供应商完全一致**，仅 baseUrl / 模型名 /
+/// 认证头 / 生成长度参数名按 [provider] 差异化。
 class DeepSeekApi {
   final String apiKey;
+
+  /// 当前使用的模型供应商（默认 DeepSeek）
+  final LlmProvider provider;
+
   final http.Client _client;
   final int _maxRetries;
   final Duration _baseTimeout;
@@ -27,6 +36,7 @@ class DeepSeekApi {
 
   DeepSeekApi({
     required this.apiKey,
+    this.provider = LlmProvider.deepseek,
     http.Client? client,
     int maxRetries = 3,
     Duration? baseTimeout,
@@ -102,9 +112,9 @@ class DeepSeekApi {
     return result.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
   }
 
-  /// 构建API URL
+  /// 构建API URL（OpenAI 兼容路径，按供应商替换根地址）
   String _buildApiUrl() {
-    return '${AppConstants.deepseekBaseUrl}/v1/chat/completions';
+    return '${provider.baseUrl}/chat/completions';
   }
 
   /// 构建消息列表
@@ -143,14 +153,17 @@ class DeepSeekApi {
     return messages;
   }
 
-  /// 构建请求体
+  /// 构建请求体（提示词内容对两家供应商完全一致）
   Map<String, dynamic> _buildRequestBody(List<Map<String, dynamic>> messages) {
-    return {
-      'model': AppConstants.deepseekModel,
+    final body = <String, dynamic>{
+      'model': provider.model,
       'messages': messages,
-      'max_tokens': AppConstants.maxTokens,
       'temperature': AppConstants.temperature,
     };
+    // DeepSeek 使用 max_tokens；MiMo 官方示例使用 max_completion_tokens
+    body[provider.useMaxCompletionTokens ? 'max_completion_tokens' : 'max_tokens'] =
+        AppConstants.maxTokens;
+    return body;
   }
 
   /// 执行HTTP请求
@@ -187,12 +200,18 @@ class DeepSeekApi {
 
   /// 构建请求头
   Map<String, String> _buildHeaders() {
-    return {
+    final headers = <String, String>{
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer $apiKey',
       'Accept': 'application/json',
       'User-Agent': 'AI-Girlfriend/1.0',
     };
+    // DeepSeek：Authorization: Bearer；MiMo：api-key
+    if (provider.useApiKeyHeader) {
+      headers['api-key'] = apiKey;
+    } else {
+      headers['Authorization'] = 'Bearer $apiKey';
+    }
+    return headers;
   }
 
   /// 解析API响应
@@ -290,6 +309,16 @@ class DeepSeekApi {
     return _inferAction(reply, userMsg);
   }
 
+  /// 判断用户是否在向 AI 道谢（而非感谢其他人/事物）。
+  /// "谢谢/感谢"后紧跟"你/您" → 对 AI 道谢；
+  /// "谢谢/感谢"在句尾或后跟语气词/标点 → 对 AI 道谢；
+  /// 后面跟了其他人称、名字或事物（"谢谢小明""感谢大家"）→ 不是对 AI 道谢。
+  bool _isThanksToAI(String text) {
+    final toYou = RegExp(r'(谢谢|感谢)(你|您)');
+    final atEnd = RegExp(r'(谢谢|感谢)(?=[啦呀哦啊呢哈吧嘛～~！!。.?？\s]|$)');
+    return toYou.hasMatch(text) || atEnd.hasMatch(text);
+  }
+
   /// 动作语义推断：当AI漏给 action 时，扫描文本关键词，让动作和语义对得上。
   /// 例如用户让AI感谢、或AI回复里出现"谢谢/你真好" → thankful；
   /// 出现"太棒了/为你鼓掌" → clap；"不要/不行/别嘛" → refuse 等。
@@ -298,8 +327,10 @@ class DeepSeekApi {
     final u = userMsg.toLowerCase();
 
     // 1) 用户明确要求的动作
-    if (u.contains('感谢') || u.contains('谢谢我') || u.contains('道谢') ||
-        u.contains('对我好一点')) {
+    // 只有用户在向 AI 道谢时才触发（"谢谢你/谢谢啦/谢谢"），
+    // 感谢其他人或事物（"谢谢小明""感谢大家"）不触发。
+    if (_isThanksToAI(u) || u.contains('道谢') || u.contains('对我好一点') ||
+        u.contains('谢谢我')) {
       return 'thankful';
     }
     if (u.contains('鼓掌') || u.contains('为我骄傲') || u.contains('夸我') ||

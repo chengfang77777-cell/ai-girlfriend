@@ -47,7 +47,7 @@ class CharacterListPage extends ConsumerWidget {
             )
           else
             SizedBox(
-              height: 220,
+              height: 250,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: presetCharacters.length,
@@ -67,6 +67,20 @@ class CharacterListPage extends ConsumerWidget {
                           .state = character.id;
                       ref.read(messageRefreshProvider.notifier).state++;
                       Navigator.of(context).pop();
+                    },
+                    onClearChat: () async {
+                      await ref
+                          .read(chatNotifierProvider.notifier)
+                          .clearChat(character.id);
+                      ref.read(messageRefreshProvider.notifier).state++;
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                                '已清除与"${character.name}"的聊天记录'),
+                          ),
+                        );
+                      }
                     },
                   );
                 },
@@ -145,6 +159,20 @@ class CharacterListPage extends ConsumerWidget {
                 onDelete: () {
                   _showDeleteConfirmation(context, ref, character.id,
                       character.name);
+                },
+                onClearChat: () async {
+                  await ref
+                      .read(chatNotifierProvider.notifier)
+                      .clearChat(character.id);
+                  ref.read(messageRefreshProvider.notifier).state++;
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content:
+                            Text('已清除与"${character.name}"的聊天记录'),
+                      ),
+                    );
+                  }
                 },
               );
             }),

@@ -264,7 +264,10 @@ function setEmotion(emotion) {
   }
   const expr = EMOTION_EXPRESSIONS[emotion] || EMOTION_EXPRESSIONS.neutral;
   // 已知情绪通道先平滑归零，再叠加目标表情（全程插值，无跳变）
-  _setExpressionTargets({ happy: 0, sad: 0, angry: 0, surprised: 0, shy: 0, blush: 0, ...expr });
+  // 说话（口型播放）时由 _applyEmotionWeights 自动衰减表情权重，避免与 viseme 叠加成奇怪嘴型
+  _emotionBaseWeights = { ...expr };
+  _setExpressionTargets({ happy: 0, sad: 0, angry: 0, surprised: 0, shy: 0, blush: 0 });
+  _applyEmotionWeights();
 }
 
 async function startGreeting() {
@@ -835,6 +838,24 @@ function _saveDefaultPose(){
 }
 
 // Emotion-driven expression + body language
+let _emotionBaseWeights = {};   // 当前情绪的原始表情权重（未衰减）
+// 口型播放期间的情绪表情衰减系数：
+// happy/sad 等表情自带嘴部变形，若与 viseme 同时叠加会扭成奇怪嘴型，
+// 说话时把表情权重压到 25%（嘴型交给口型系统），播放结束自动恢复。
+const LIP_FACE_ATTENUATION = 0.25;
+
+function _applyEmotionWeights(){
+  if(!currentVrm)return;
+  const factor = window._isLipSyncPlaying ? LIP_FACE_ATTENUATION : 1.0;
+  const scaled = {};
+  for(const k of Object.keys(_emotionBaseWeights)){
+    scaled[k] = _emotionBaseWeights[k] * factor;
+  }
+  _setExpressionTargets(scaled);
+}
+// 供口型系统在开始/结束说话时刷新表情权重
+window.refreshExpressionWeights = _applyEmotionWeights;
+
 function _updateEmotion(emotion){
   if(!currentVrm)return;
   const em=currentVrm.expressionManager;
@@ -864,7 +885,8 @@ function _updateEmotion(emotion){
   case'surprised': on={surprised:1.0}; break;
   default: on={neutral:1.0}; break;
   }
-  _setExpressionTargets(on);
+  _emotionBaseWeights = on;
+  _applyEmotionWeights();
   _activeEmotion=emotion;
   // 非中立表情展示几秒后自动恢复中立，避免表情定格不动
   if(emotion&&emotion!=='neutral')_scheduleEmotionReset();
@@ -1281,6 +1303,8 @@ if (document.readyState === 'complete') {
       lipInterval = null;
     }
     window._isLipSyncPlaying = false;
+    // 手动停止也恢复情绪表情权重
+    if(window.refreshExpressionWeights) window.refreshExpressionWeights();
     _smoothOpen = 0;
     _smoothAa = 0;
     _smoothIh = 0;
@@ -1300,11 +1324,15 @@ if (document.readyState === 'complete') {
     try{
       if(window._isLipSyncPlaying) return;
       window._isLipSyncPlaying = true;
+      // 说话时压低情绪表情权重，避免与 viseme 叠加出奇怪嘴型
+      if(window.refreshExpressionWeights) window.refreshExpressionWeights();
 
       if(audioEl){ try{audioEl.pause(); audioEl.src='';}catch(e){} }
       audioEl = new Audio(url);
       audioEl.onended = function(){
         window._isLipSyncPlaying = false;
+        // 说话结束恢复情绪表情权重
+        if(window.refreshExpressionWeights) window.refreshExpressionWeights();
         if(lipInterval){ clearInterval(lipInterval); lipInterval=null; }
         _smoothOpen = 0;
         _smoothAa = 0; _smoothIh = 0; _smoothOh = 0; _smoothOu = 0; _smoothEe = 0;

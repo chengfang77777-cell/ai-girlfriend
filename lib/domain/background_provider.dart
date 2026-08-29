@@ -33,13 +33,22 @@ void saveBackgroundChoice(WidgetRef ref, String bgId) {
   // 触发背景变化通知
   ref.read(backgroundChangeProvider.notifier).state++;
   final storage = ref.read(storageServiceProvider);
-  storage.setSetting('background_id', bgId);
+  storage.setSetting(AppConstants.backgroundKey, bgId);
+}
+
+/// 重置为用户未选择背景（使用角色默认背景）
+void resetBackgroundChoice(WidgetRef ref) {
+  ref.read(backgroundIdProvider.notifier).state = null;
+  // 触发背景变化通知，让 VRM viewer 即时刷新
+  ref.read(backgroundChangeProvider.notifier).state++;
+  final storage = ref.read(storageServiceProvider);
+  storage.setSetting(AppConstants.backgroundKey, null);
 }
 
 /// 加载用户的背景选择
 void loadBackgroundChoice(WidgetRef ref) {
   final storage = ref.read(storageServiceProvider);
-  final bgId = storage.getSetting<String>('background_id');
+  final bgId = storage.getSetting<String>(AppConstants.backgroundKey);
   if (bgId != null) {
     ref.read(backgroundIdProvider.notifier).state = bgId;
   }

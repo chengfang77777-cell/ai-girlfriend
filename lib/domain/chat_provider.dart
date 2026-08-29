@@ -1,15 +1,33 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/constants.dart';
 import '../models/message.dart';
 import '../data/storage_service.dart';
 import '../data/deepseek_api.dart';
+import '../data/llm_provider.dart';
 import 'character_provider.dart';
 
-// DeepSeek API provider - 基于storage中的apiKey动态创建
-final deepseekApiProvider = Provider<DeepSeekApi?>((ref) {
+/// 当前选择的对话模型供应商（DeepSeek / 小米 MiMo）
+///
+/// 使用 StateProvider 而非 Provider：Provider 的结果会被永久缓存，
+/// 切换供应商后 UI 与实际调用的客户端都拿不到新值。
+/// 初始值从本地存储读取，切换时由调用方同时写存储并更新 state，
+/// 以便 [llmApiProvider] 等依赖者自动重建。
+final llmProviderProvider = StateProvider<LlmProvider>((ref) {
   final storage = ref.watch(storageServiceProvider);
-  final apiKey = storage.apiKey;
+  return LlmProvider.fromId(
+      storage.getSetting<String>(AppConstants.llmProviderKey));
+});
+
+// 对话模型客户端 provider
+// 按当前供应商取对应的 Key：MiMo 用 MiMo Key（与 TTS 同一个），其余用 DeepSeek Key
+final llmApiProvider = Provider<DeepSeekApi?>((ref) {
+  final storage = ref.watch(storageServiceProvider);
+  final provider = ref.watch(llmProviderProvider);
+  final apiKey = provider.id == LlmProvider.mimo.id
+      ? storage.mimoApiKey
+      : storage.apiKey;
   if (apiKey == null || apiKey.isEmpty) return null;
-  return DeepSeekApi(apiKey: apiKey);
+  return DeepSeekApi(apiKey: apiKey, provider: provider);
 });
 
 // 消息刷新计数器——每次发消息+1，触发UI重建
@@ -92,12 +110,24 @@ class ChatNotifier extends StateNotifier<Map<String, List<Message>>> {
     await _storage.deleteMessage(messageId);
     state = {...state, characterId: _storage.getMessages(characterId)};
   }
+
+  /// 清除指定角色的全部聊天记录
+  Future<void> clearChat(String characterId) async {
+    await _storage.clearMessages(characterId);
+    state = {...state, characterId: <Message>[]};
+  }
+
+  /// 清除所有角色的聊天记录
+  Future<void> clearAllChats() async {
+    await _storage.clearAllMessages();
+    state = {};
+  }
 }
 
 // 聊天Managed Provider
 final chatNotifierProvider =
     StateNotifierProvider<ChatNotifier, Map<String, List<Message>>>((ref) {
   final storage = ref.watch(storageServiceProvider);
-  final api = ref.watch(deepseekApiProvider);
+  final api = ref.watch(llmApiProvider);
   return ChatNotifier(storage, api);
 });
