@@ -1,21 +1,19 @@
-import 'dart:io' show File, Platform;
-import 'package:path_provider/path_provider.dart';
+import 'dart:io' show Platform;
+import 'dart:convert';
 import 'dart:math' show sin;
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants.dart';
-import '../../models/message.dart';
 import '../../domain/character_provider.dart';
 import '../../domain/chat_provider.dart';
 import '../../domain/voice_provider.dart';
 import '../../domain/background_provider.dart';
-import '../widgets/avatar_display.dart' if (dart.library.html) '../widgets/avatar_display_web.dart';
+import '../widgets/avatar_display.dart'
+    if (dart.library.html) '../widgets/avatar_display_web.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input.dart';
+import '../widgets/chat_wheel_region.dart';
 import 'character_list_page.dart';
 import 'settings_page.dart';
 
@@ -34,53 +32,13 @@ class _HomePageState extends ConsumerState<HomePage> {
   bool _didInitialScroll = false;
   String? _lastCharacterId;
   int _scrollRetries = 0;
+  int _replyGeneration = 0;
+  String? _reactionId;
 
-  /// WAV bytes → write to vrm dir → set window._pendingAudioUrl
-  /// The viewer polls _pendingAudioUrl in its animate() loop and plays + analyzes.
-  /// Works on both Windows (webview_windows) and mobile (webview_flutter).
-  void _sendAudioToLipSync(Uint8List wavBytes) {
-    try {
-      final dynamic state = _avatarKey.currentState;
-      if (Platform.isWindows) {
-        final dynamic ctrl = state?.windowsController;
-        if (ctrl == null) return;
-        _writeAudioAndPlay(ctrl, wavBytes, isWindows: true);
-      } else {
-        final dynamic ctrl = state?.mobileController;
-        if (ctrl == null) return;
-        _writeAudioAndPlay(ctrl, wavBytes, isWindows: false);
-      }
-    } catch (e) {
-      debugPrint('[HomePage] lipSync send failed: $e');
-    }
-  }
-
-  Future<void> _writeAudioAndPlay(dynamic ctrl, Uint8List wavBytes, {required bool isWindows}) async {
-    try {
-      // 先停止之前的音频播放
-      if (isWindows) {
-        ctrl.executeScript('stopCurrentAudio()');
-      } else {
-        await ctrl.runJavaScript('stopCurrentAudio()');
-      }
-
-      // 写入本地服务器目录（由 shelf 服务，与 vrm_viewer.html 同源）。
-      // 浏览器端会基于 window._vrmBaseUrl 拼接出
-      // http://127.0.0.1:<port>/audio.wav 进行播放。
-      final appDocDir = await getApplicationDocumentsDirectory();
-      final vrmDir = '${appDocDir.path}/vrm';
-      final audioFile = File('$vrmDir/audio.wav');
-      await audioFile.writeAsBytes(wavBytes, flush: true);
-      debugPrint('[HomePage] wrote ${wavBytes.length} bytes to $vrmDir/audio.wav');
-      if (isWindows) {
-        ctrl.executeScript('window.__pendingAudioUrl = "audio.wav";');
-      } else {
-        await ctrl.runJavaScript('window.__pendingAudioUrl = "audio.wav";');
-      }
-      debugPrint('[HomePage] triggered lip-sync playback');
-    } catch (e) {
-      debugPrint('[HomePage] _writeAudioAndPlay error: $e');
-    }
+  Future<void> _sendAudioToLipSync(Uint8List wavBytes) async {
+    final dynamic state = _avatarKey.currentState;
+    if (state == null) throw StateError('播放器尚未就绪，请重试');
+    await state.playAudio(wavBytes, reactionId: _reactionId);
   }
 
   /// GlobalKey to look up the AvatarDisplay's state (Windows only).
@@ -94,10 +52,17 @@ class _HomePageState extends ConsumerState<HomePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final voiceNotifier = ref.read(voiceNotifierProvider.notifier);
       voiceNotifier.lipSyncSender = _sendAudioToLipSync;
+      voiceNotifier.stopPlayback = _stopAvatarAudio;
       voiceNotifier.onTtsError = (message) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(message)),
+            SnackBar(
+                content: Text(message),
+                action: SnackBarAction(
+                    label: '重试语音',
+                    onPressed: () {
+                      voiceNotifier.retry();
+                    })),
           );
         }
       };
@@ -109,6 +74,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     _scrollController.dispose();
     _inputController.dispose();
     final voiceNotifier = ref.read(voiceNotifierProvider.notifier);
+    voiceNotifier.stop();
+    voiceNotifier.stopPlayback = null;
     voiceNotifier.lipSyncSender = null;
     voiceNotifier.onTtsError = null;
     super.dispose();
@@ -122,7 +89,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (_didInitialScroll || _scrollRetries > 60) return;
     _scrollRetries++;
     if (!_scrollController.hasClients) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottomIfNeeded());
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _jumpToBottomIfNeeded());
       return;
     }
     final max = _scrollController.position.maxScrollExtent;
@@ -133,7 +101,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     } else {
       _lastJumpExtent = max;
       // 下一帧再跳一次，catch 懒加载导致 extent 增长的情况
-      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottomIfNeeded());
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _jumpToBottomIfNeeded());
     }
   }
 
@@ -154,21 +123,29 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
   }
 
-  void _handleCtrlScroll(PointerSignalEvent event) {
-    if (event is! PointerScrollEvent) return;
-    final delta = event.scrollDelta.dy;
-    final ctrlHeld = HardwareKeyboard.instance.isControlPressed;
+  Future<void> _zoomModel(double delta) async {
+    if (!delta.isFinite) return;
+    final dynamic state = _avatarKey.currentState;
+    if (state == null) return;
+    try {
+      final script = 'window.zoomModelByWheel?.($delta);';
+      if (Platform.isWindows) {
+        await state.windowsController?.executeScript(script);
+      } else {
+        await state.mobileController?.runJavaScript(script);
+      }
+    } catch (error) {
+      debugPrint('[HomePage] Model zoom failed: $error');
+    }
+  }
 
-    // Ctrl+scroll → zoom handled by webview directly (see vrm_viewer.html wheel listener)
-    if (ctrlHeld) return;
-
-    // Normal scroll → scroll chat list
-    if (_scrollController.hasClients) {
-      final newPos = (_scrollController.offset + delta).clamp(
-        0.0,
-        _scrollController.position.maxScrollExtent,
-      );
-      _scrollController.jumpTo(newPos);
+  Future<void> _stopAvatarAudio() async {
+    final dynamic state = _avatarKey.currentState;
+    if (state == null) return;
+    try {
+      await state.stopAudio();
+    } catch (error) {
+      debugPrint('[HomePage] Stop audio failed: $error');
     }
   }
 
@@ -194,19 +171,29 @@ class _HomePageState extends ConsumerState<HomePage> {
     ref.read(isSendingProvider.notifier).state = true;
     _scrollToBottom(force: true);
 
+    final generation = ++_replyGeneration;
+    _reactionId = null;
+    ref.read(voiceNotifierProvider.notifier).stop();
+    await _stopAvatarAudio();
+    if (!mounted) return;
     // 通知WebView用户发送消息，停止待机动作
     _notifyUserSendMessage();
 
     try {
-      final aiMessage = await ref.read(chatNotifierProvider.notifier).sendMessage(
-            character.id,
-            text,
-          );
+      final aiMessage =
+          await ref.read(chatNotifierProvider.notifier).sendMessage(
+                character.id,
+                text,
+              );
       // 触发消息刷新
+      if (!mounted) return;
       ref.read(messageRefreshProvider.notifier).state++;
 
       // TTS + 情绪/动作触发动画
-      if (aiMessage != null) {
+      if (aiMessage != null &&
+          generation == _replyGeneration &&
+          ref.read(currentCharacterIdProvider) == character.id) {
+        _reactionId = '${character.id}:$generation';
         // 由DeepSeek的 action 字段驱动身体动作（emotion 驱动面部表情）
         _triggerAction(aiMessage.action, aiMessage.emotion);
 
@@ -214,7 +201,8 @@ class _HomePageState extends ConsumerState<HomePage> {
         if (autoPlay) {
           // MiMo TTS 支持的有效语音名（与设置页一致）
           const supportedVoices = {'冰糖', '茉莉'};
-          final settingVoice = ref.read(storageServiceProvider)
+          final settingVoice = ref
+                  .read(storageServiceProvider)
                   .getSetting<String>(AppConstants.ttsVoiceKey) ??
               AppConstants.defaultVoice;
           final rawVoice = character.voiceName.isNotEmpty
@@ -222,17 +210,17 @@ class _HomePageState extends ConsumerState<HomePage> {
               : settingVoice;
           // 兜底：历史数据可能存过无效语音名（如 zh-CN-XiaoxiaoNeural），
           // 或自定义角色未设置有效语音时，回退到设置里的语音
-          final voice = supportedVoices.contains(rawVoice)
-              ? rawVoice
-              : settingVoice;
+          final voice =
+              supportedVoices.contains(rawVoice) ? rawVoice : settingVoice;
           final voiceDescription = character.voiceDescription;
           // 过滤掉括号内容后再TTS
           final filteredContent = _filterBrackets(aiMessage.content);
           ref.read(voiceNotifierProvider.notifier).speak(
-            filteredContent,
-            voice: voice,
-            voiceDescription: voiceDescription,
-          );
+                filteredContent,
+                characterId: character.id,
+                voice: voice,
+                voiceDescription: voiceDescription,
+              );
         }
       }
     } catch (e) {
@@ -305,14 +293,13 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _notifyUserSendMessage() {
     final dynamic state = _avatarKey.currentState;
-    final dynamic ctrl = Platform.isWindows
-        ? state?.windowsController
-        : state?.mobileController;
+    final dynamic ctrl =
+        Platform.isWindows ? state?.windowsController : state?.mobileController;
     if (ctrl == null) return;
     if (Platform.isWindows) {
-      ctrl.executeScript("onUserSendMessage()");
+      ctrl.executeScript('onUserSendMessage()');
     } else {
-      ctrl.runJavaScript("onUserSendMessage()");
+      ctrl.runJavaScript('onUserSendMessage()');
     }
   }
 
@@ -323,9 +310,8 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _triggerAction(String? action, String? emotion) {
     final dynamic state = _avatarKey.currentState;
-    final dynamic ctrl = Platform.isWindows
-        ? state?.windowsController
-        : state?.mobileController;
+    final dynamic ctrl =
+        Platform.isWindows ? state?.windowsController : state?.mobileController;
     if (ctrl == null) return;
 
     final a = (action ?? 'talk').trim().toLowerCase();
@@ -335,7 +321,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     final normalizedE = (e == 'netural' || e == 'natrual') ? 'neutral' : e;
 
     // 按动作名触发身体动画；未命中（talk/未知）时 webview 内部保持待机+口型
-    final js = "triggerAction('$normalizedA','$normalizedE')";
+    final js = 'triggerAction(${jsonEncode(normalizedA)},'
+        '${jsonEncode(normalizedE)},${jsonEncode(_reactionId)})';
     if (Platform.isWindows) {
       ctrl.executeScript(js);
     } else {
@@ -343,28 +330,20 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
   }
 
-  Emotion _parseEmotion(String? emotionStr) {
-    switch (emotionStr) {
-      case 'shy':
-        return Emotion.shy;
-      case 'angry':
-        return Emotion.angry;
-      case 'sad':
-        return Emotion.sad;
-      case 'surprised':
-        return Emotion.surprised;
-      case 'neutral':
-        return Emotion.neutral;
-      default:
-        return Emotion.happy;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    ref.listen<String?>(currentCharacterIdProvider, (previous, next) {
+      if (previous == next) return;
+      ++_replyGeneration;
+      _reactionId = null;
+      _triggerAction('talk', 'neutral');
+      ref.read(voiceNotifierProvider.notifier).stop();
+      _stopAvatarAudio();
+    });
     final character = ref.watch(currentCharacterProvider);
     final messages = ref.watch(currentMessagesProvider);
     final isSending = ref.watch(isSendingProvider);
+    final voiceStatus = ref.watch(voiceStatusProvider);
     final colorScheme = Theme.of(context).colorScheme;
     final background = ref.watch(currentBackgroundProvider);
 
@@ -376,19 +355,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       _lastJumpExtent = null;
     }
     if (!_didInitialScroll && messages.isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottomIfNeeded());
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _jumpToBottomIfNeeded());
     }
-
-    // Get current emotion from the last AI message（倒查，避免全量遍历构造中间 List）
-    Message? lastAiMsg;
-    for (final m in messages.reversed) {
-      if (m.role == 'assistant') {
-        lastAiMsg = m;
-        break;
-      }
-    }
-    final currentEmotion =
-        lastAiMsg != null ? _parseEmotion(lastAiMsg.emotion) : Emotion.happy;
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -420,10 +389,9 @@ class _HomePageState extends ConsumerState<HomePage> {
               shape: BoxShape.circle,
             ),
             child: IconButton(
-              icon: const Icon(Icons.delete_sweep_outlined,
-                  color: Colors.white),
-              onPressed:
-                  character == null ? null : _showClearChatConfirmation,
+              icon:
+                  const Icon(Icons.delete_sweep_outlined, color: Colors.white),
+              onPressed: character == null ? null : _showClearChatConfirmation,
               tooltip: '清除聊天记录',
             ),
           ),
@@ -461,113 +429,147 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          // Layer 1: Full-screen 3D model background
-          // 注意：WebView 是原生 PlatformView，本身由系统独立合成层承载。
-          // 给它套 RepaintBoundary 反而会让 Flutter 每帧多建一个离屏合成层、
-          // 加重 GPU 合成负担（表现为模型+背景卡顿）。因此这里故意不包 RepaintBoundary，
-          // 聊天列表层与滚动条层同理也不包（滚动条用 CustomPaint 的 repaint 隔离重绘）。
-          Positioned.fill(
-            child: AvatarDisplay(
-              key: _avatarKey,
-              characterName: character?.name ?? '选择角色',
-              modelPath: character?.avatarModelPath,
-              currentEmotion: currentEmotion,
-              backgroundId: background.id,
+      body: ChatWheelRegion(
+        controller: _scrollController,
+        onModelZoom: _zoomModel,
+        child: Stack(
+          children: [
+            // Layer 1: Full-screen 3D model background
+            // 注意：WebView 是原生 PlatformView，本身由系统独立合成层承载。
+            // 给它套 RepaintBoundary 反而会让 Flutter 每帧多建一个离屏合成层、
+            // 加重 GPU 合成负担（表现为模型+背景卡顿）。因此这里故意不包 RepaintBoundary，
+            // 聊天列表层与滚动条层同理也不包（滚动条用 CustomPaint 的 repaint 隔离重绘）。
+            Positioned.fill(
+              child: AvatarDisplay(
+                key: _avatarKey,
+                characterName: character?.name ?? '选择角色',
+                modelPath: character?.avatarModelPath,
+                currentEmotion: Emotion.neutral,
+                backgroundId: background.id,
+                onAudioStarted: () =>
+                    ref.read(voiceStatusProvider.notifier).state = '正在说话…',
+              ),
             ),
-          ),
 
-          // Layer 2: Chat messages
-          // Listener intercepts scroll: normal → chat, Ctrl → model zoom.
-          // IgnorePointer lets drag pass through to webview for rotation.
-          // 注意：不包 RepaintBoundary。聊天列表是纯 Flutter 控件，包 RepaintBoundary
-          // 反而多建一个离屏合成层，与底层 WebView 原生层争抢 GPU，导致模型/背景卡顿。
-          // 聊天滚动流畅度已由 CustomPaint 滚动条（repaint: controller）保证。
-          Positioned(
-            left: 0, right: 0, top: MediaQuery.of(context).padding.top + 56,
-            bottom: 70,
-            child: Listener(
-                onPointerSignal: _handleCtrlScroll,
-                behavior: HitTestBehavior.translucent,
-                child: IgnorePointer(
-                  child: messages.isEmpty && !isSending
+            // Layer 2: Chat messages
+            // ChatWheelRegion routes wheel input for the entire body.
+            // IgnorePointer lets drag pass through to webview for rotation.
+            // 注意：不包 RepaintBoundary。聊天列表是纯 Flutter 控件，包 RepaintBoundary
+            // 反而多建一个离屏合成层，与底层 WebView 原生层争抢 GPU，导致模型/背景卡顿。
+            // 聊天滚动流畅度已由 CustomPaint 滚动条（repaint: controller）保证。
+            Positioned(
+              left: 0,
+              right: 0,
+              top: MediaQuery.of(context).padding.top + 56,
+              bottom: 70,
+              child: IgnorePointer(
+                child: messages.isEmpty && !isSending
                     ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 60, height: 60,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                colors: [colorScheme.primary.withOpacity(0.15), colorScheme.primary.withOpacity(0.05)],
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 60,
+                              height: 60,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: LinearGradient(
+                                  colors: [
+                                    colorScheme.primary.withOpacity(0.15),
+                                    colorScheme.primary.withOpacity(0.05)
+                                  ],
+                                ),
                               ),
+                              child: Icon(Icons.chat_bubble_outline_rounded,
+                                  size: 30,
+                                  color: colorScheme.primary.withOpacity(0.5)),
                             ),
-                            child: Icon(Icons.chat_bubble_outline_rounded, size: 30, color: colorScheme.primary.withOpacity(0.5)),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            character != null ? '💕 开始和${character.name}聊天吧' : '选择一个角色开始聊天',
-                            style: TextStyle(color: colorScheme.onSurface.withOpacity(0.5), fontSize: 15, fontWeight: FontWeight.w500),
-                          ),
-                          const SizedBox(height: 6),
-                          Text('发送第一条消息，开启你们的对话', style: TextStyle(color: colorScheme.outline.withOpacity(0.5), fontSize: 12)),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      itemCount: messages.length + (isSending ? 1 : 0),
-                      itemBuilder: (context, index) {
-                        if (isSending && index == messages.length) {
-                          return const _TypingIndicator();
-                        }
+                            const SizedBox(height: 16),
+                            Text(
+                              character != null
+                                  ? '💕 开始和${character.name}聊天吧'
+                                  : '选择一个角色开始聊天',
+                              style: TextStyle(
+                                  color: colorScheme.onSurface.withOpacity(0.5),
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(height: 6),
+                            Text('发送第一条消息，开启你们的对话',
+                                style: TextStyle(
+                                    color: colorScheme.outline.withOpacity(0.5),
+                                    fontSize: 12)),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        itemCount: messages.length + (isSending ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (isSending && index == messages.length) {
+                            return const _TypingIndicator();
+                          }
 
-                        final message = messages[index];
-                        final isUser = message.role == 'user';
-                        return ChatBubble(
-                          message: message.content,
-                          type: isUser ? MessageType.user : MessageType.ai,
-                          timestamp: message.timestamp,
+                          final message = messages[index];
+                          final isUser = message.role == 'user';
+                          return ChatBubble(
+                            message: message.content,
+                            type: isUser ? MessageType.user : MessageType.ai,
+                            timestamp: message.timestamp,
                             onCopy: () {},
                             onDelete: () async {
                               final id = character?.id;
                               if (id == null) return;
                               await ref
                                   .read(chatNotifierProvider.notifier)
-                                  .deleteMessage(id, message.id!);
+                                  .deleteMessage(id, message.id);
                               ref.read(messageRefreshProvider.notifier).state++;
                             },
-                        );
-                      },
-                    ),
-                ),
+                          );
+                        },
+                      ),
               ),
-          ),
-
-          // Layer 3: 可交互的聊天滚动条（覆盖在 IgnorePointer 之上，可拖动）
-          // 注：刻意不包 RepaintBoundary——聊天列表滚动重绘已由 _ThumbPainter
-          // 的 repaint: controller 隔离，额外包层反而加重 GPU 合成负担导致卡顿。
-          Positioned(
-            right: 0,
-            top: MediaQuery.of(context).padding.top + 56,
-            bottom: 70,
-            width: 16,
-            child: _ChatScrollbar(controller: _scrollController),
-          ),
-
-          // Layer 4: Input area at bottom (interactive, stays on top)
-          Positioned(
-            left: 0, right: 0, bottom: 0,
-            child: ChatInput(
-              onSend: _sendMessage,
-              isLoading: isSending,
             ),
-          ),
-        ],
+
+            // Layer 3: 可交互的聊天滚动条（覆盖在 IgnorePointer 之上，可拖动）
+            // 注：刻意不包 RepaintBoundary——聊天列表滚动重绘已由 _ThumbPainter
+            // 的 repaint: controller 隔离，额外包层反而加重 GPU 合成负担导致卡顿。
+            Positioned(
+              right: 0,
+              top: MediaQuery.of(context).padding.top + 56,
+              bottom: 70,
+              width: 16,
+              child: _ChatScrollbar(controller: _scrollController),
+            ),
+
+            if (voiceStatus != null)
+              Positioned(
+                  left: 16,
+                  bottom: 78,
+                  child: Material(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        child: Text(voiceStatus,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 12))),
+                  )),
+            // Layer 4: Input area at bottom (interactive, stays on top)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: ChatInput(
+                onSend: _sendMessage,
+                isLoading: isSending,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -622,7 +624,8 @@ class _ChatScrollbarState extends State<_ChatScrollbar> {
               setState(() => _dragging = true);
               _jumpToDy(d.localPosition.dy, trackHeight);
             },
-            onVerticalDragUpdate: (d) => _jumpToDy(d.localPosition.dy, trackHeight),
+            onVerticalDragUpdate: (d) =>
+                _jumpToDy(d.localPosition.dy, trackHeight),
             onVerticalDragEnd: (_) => setState(() => _dragging = false),
             onVerticalDragCancel: () => setState(() => _dragging = false),
             child: CustomPaint(
@@ -716,10 +719,12 @@ class _TypingIndicatorState extends State<_TypingIndicator>
         children: [
           const SizedBox(width: 12),
           Container(
-            width: 32, height: 32,
+            width: 32,
+            height: 32,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
-              gradient: LinearGradient(colors: [Color(0xFFFF69B4), Color(0xFFFFB6C1)]),
+              gradient: LinearGradient(
+                  colors: [Color(0xFFFF69B4), Color(0xFFFFB6C1)]),
             ),
             child: const Icon(Icons.favorite, size: 16, color: Colors.white),
           ),
@@ -729,8 +734,10 @@ class _TypingIndicatorState extends State<_TypingIndicator>
             decoration: BoxDecoration(
               color: colorScheme.surfaceContainerHighest.withOpacity(0.7),
               borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(4), topRight: Radius.circular(20),
-                bottomLeft: Radius.circular(20), bottomRight: Radius.circular(20),
+                topLeft: Radius.circular(4),
+                topRight: Radius.circular(20),
+                bottomLeft: Radius.circular(20),
+                bottomRight: Radius.circular(20),
               ),
             ),
             child: Row(
@@ -748,7 +755,8 @@ class _TypingIndicatorState extends State<_TypingIndicator>
                       offset: Offset(0, offsetY),
                       child: Container(
                         margin: const EdgeInsets.symmetric(horizontal: 3),
-                        width: 9, height: 9,
+                        width: 9,
+                        height: 9,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: colorScheme.primary.withOpacity(opacity),

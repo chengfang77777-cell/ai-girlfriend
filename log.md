@@ -110,6 +110,31 @@
 3. 由于内置密钥已清空（`secrets.dart` 为空），**新安装的应用首次使用必须在「设置」中填入 DeepSeek / MiMo API Key**，否则发消息会提示去设置页配置。
 4. 构建产物均位于 `build/` 目录，已被 `.gitignore` 排除，不会被提交。
 
+### 10. Git 提交与发布（用户授权执行）
+
+**执行前备份**：`D:\AIcursorclaude\ai_girlfriend_vrm_backup_20260829.bundle`（`git bundle create --all`，237.9MB，含全部 refs，可用于回滚）。
+
+**步骤与结果**：
+
+1. `git fetch --all` 拉取远程最新，发现 GitHub 有 2 个本地没有的提交（`f29b86c Update README.md`、`e9ece1b github--version_1.0`），先整合再推送，避免覆盖。
+2. 工作区改动提交为 `0daf614 version_2`（含删除旧 APK、新增 `llm_provider.dart` / `log.md` / `llm_provider_test.dart`）。
+3. `git merge -X ours github/master` 合并 GitHub 独有提交（`.gitattributes` / `README.md` / `README_EN.md` 的更新）。
+4. `git-filter-repo --invert-paths --path build/app/outputs/flutter-apk/app-release.apk --force`：把 161MB 的 APK（LFS 指针）从**全部提交历史**中彻底移除。15 个 commit 被重写，新 HEAD `503a840`。
+5. 校验：`git log --all -- <apk 路径>` 为空、`git ls-files` 无 .apk、工作区无该文件。
+6. Force push 到两个远程（本地 `dev_cf` → 远程 `master`）：
+   - GitHub：`f29b86c...503a840 forced update`
+   - Gitee：`6f6e6cc...503a840 forced update`
+   - 两个远程 master 现均为 `503a8401c34e3868a79f2d935a69d826d23a355e`
+7. `git lfs prune` 清理本地 LFS 中已无引用的旧 APK 对象（161MB）。
+
+**网络处理**：GitHub 的 SSH（22 端口）被网络层掐断，改用 HTTPS + `gh` 凭据临时认证完成 fetch/push，未修改全局 git config。
+
+**发布**：GitHub Release `version_2` 已创建并上传三个 APK
+<https://github.com/chengfang77777-cell/ai-girlfriend/releases/tag/version_2>
+
 ### 待办
 
-- 清理两个远程仓库的历史敏感提交与 GitHub LFS 中的旧 APK（历史中的旧包仍含已吊销密钥的编译产物）。
+- GitHub 服务端 Git LFS 中仍存有那个 161MB 的旧 APK 对象（历史引用已清除，本地副本已 prune）。若 LFS 存储/流量配额紧张，需在 GitHub 仓库 Settings 的 Git LFS 管理界面手动删除该对象。
+- 历史提交中仍残留两处**已吊销**的 API Key 明文（`storage_service.dart`、`tts_service_web.dart` 的旧版本）。密钥已在控制台吊销，风险已解除；如需从历史中一并抹除，可再跑一次 `git-filter-repo --replace-text` 并重新 force push（需再重写一次历史）。
+- 当前 release 使用 debug 签名，上架应用商店前需配置正式签名。
+- 本机 log.md 的本次记录尚未提交，下次提交时一并推送。

@@ -22,7 +22,7 @@ class ChatInput extends StatefulWidget {
   State<ChatInput> createState() => _ChatInputState();
 }
 
-class _ChatInputState extends State<ChatInput> {
+class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
   late TextEditingController _controller;
   late FocusNode _focusNode;
 
@@ -32,18 +32,41 @@ class _ChatInputState extends State<ChatInput> {
     _controller = TextEditingController();
     _focusNode = FocusNode();
     _controller.addListener(() => setState(() {}));
+    _focusNode.addListener(_onFocusChanged);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  void _onFocusChanged() => setState(() {});
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // Let the desktop FocusManager restore its suspended control first.
+    Future.microtask(() {
+      if (!mounted ||
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
+          ModalRoute.of(context)?.isCurrent == false) {
+        return;
+      }
+      // Restore an idle chat, without taking focus from another control.
+      final primaryFocus = FocusManager.instance.primaryFocus;
+      if (primaryFocus == null || primaryFocus is FocusScopeNode) {
+        _focusNode.requestFocus();
+      }
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _focusNode.removeListener(_onFocusChanged);
     // _controller.dispose() 会自行清理已注册的 listener，无需手动移除
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
-  bool get _canSend =>
-      _controller.text.trim().isNotEmpty && !widget.isLoading;
+  bool get _canSend => _controller.text.trim().isNotEmpty && !widget.isLoading;
 
   void _sendMessage() {
     final text = _controller.text.trim();
@@ -110,6 +133,7 @@ class _ChatInputState extends State<ChatInput> {
                   child: TextField(
                     controller: _controller,
                     focusNode: _focusNode,
+                    autofocus: true,
                     maxLines: null,
                     textInputAction: TextInputAction.send,
                     keyboardType: TextInputType.text,
@@ -126,8 +150,13 @@ class _ChatInputState extends State<ChatInput> {
                       border: InputBorder.none,
                     ),
                     textCapitalization: TextCapitalization.sentences,
-                    onSubmitted:
-                        widget.isLoading ? null : (_) => _sendMessage(),
+                    // The default send action unfocuses before onSubmitted,
+                    // including when a blank/loading draft cannot be sent.
+                    onEditingComplete: _controller.clearComposing,
+                    onSubmitted: (_) => _sendMessage(),
+                    // Blank desktop clicks should not end typing. Other
+                    // fields and routes still request their own focus normally.
+                    onTapOutside: (_) {},
                     style: const TextStyle(
                       fontSize: 15,
                       color: Colors.black87,
@@ -141,9 +170,7 @@ class _ChatInputState extends State<ChatInput> {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: _canSend
-                      ? const Color(0xFFFF69B4)
-                      : Colors.grey[300],
+                  color: _canSend ? const Color(0xFFFF69B4) : Colors.grey[300],
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child: Material(

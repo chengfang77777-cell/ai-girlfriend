@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:convert';
+import '../../domain/audio_playback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,19 +17,36 @@ import 'package:webview_windows/webview_windows.dart';
 final poseVersionProvider = StateProvider<int>((ref) => 0);
 
 enum Emotion {
-  happy, shy, angry, sad, surprised, neutral,
+  happy,
+  shy,
+  angry,
+  sad,
+  surprised,
+  neutral,
+  refuse,
+  thankful,
 }
 
 const Map<Emotion, String> emotionExprNames = {
-  Emotion.happy: 'happy', Emotion.shy: 'shy',
-  Emotion.angry: 'angry', Emotion.sad: 'sad',
-  Emotion.surprised: 'surprised', Emotion.neutral: 'neutral',
+  Emotion.happy: 'happy',
+  Emotion.shy: 'shy',
+  Emotion.angry: 'angry',
+  Emotion.sad: 'sad',
+  Emotion.surprised: 'surprised',
+  Emotion.neutral: 'neutral',
+  Emotion.refuse: 'refuse',
+  Emotion.thankful: 'thankful',
 };
 
 const Map<Emotion, String> emotionToBodyLang = {
-  Emotion.happy: 'happy', Emotion.shy: 'shy',
-  Emotion.angry: 'angry', Emotion.sad: 'sad',
-  Emotion.surprised: 'surprised', Emotion.neutral: 'neutral',
+  Emotion.happy: 'happy',
+  Emotion.shy: 'shy',
+  Emotion.angry: 'angry',
+  Emotion.sad: 'sad',
+  Emotion.surprised: 'surprised',
+  Emotion.neutral: 'neutral',
+  Emotion.refuse: 'refuse',
+  Emotion.thankful: 'thankful',
 };
 
 class AvatarDisplay extends StatefulWidget {
@@ -38,19 +56,22 @@ class AvatarDisplay extends StatefulWidget {
   final VoidCallback? onTap;
   final int poseVersion;
   final String? backgroundId;
+
   /// Action label (wave, nod, clap, …) that the AI returned with its reply.
   /// When this changes we play the matching motion clip in the VRM viewer.
   final String? action;
+  final VoidCallback? onAudioStarted;
 
   const AvatarDisplay({
     super.key,
     required this.characterName,
     this.modelPath,
-    this.currentEmotion = Emotion.happy,
+    this.currentEmotion = Emotion.neutral,
     this.onTap,
     this.poseVersion = 0,
     this.backgroundId,
     this.action,
+    this.onAudioStarted,
   });
 
   @override
@@ -64,12 +85,84 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
   // For mobile
   WebViewController? _mobileCtrl;
 
+  AudioPlayback? _playback;
+  int _audioGeneration = 0;
+
+  Future<void> _runScript(String script) async {
+    if (_windowsCtrl != null) {
+      await _windowsCtrl!
+          .executeScript(script)
+          .timeout(const Duration(seconds: 5));
+    } else if (_mobileCtrl != null) {
+      await _mobileCtrl!
+          .runJavaScript(script)
+          .timeout(const Duration(seconds: 5));
+    } else {
+      throw StateError('播放器尚未就绪，请等待角色加载后重试');
+    }
+  }
+
+  Future<void> stopAudio() async {
+    ++_audioGeneration;
+    _playback?.cancel();
+    _playback = null;
+    if (_windowsCtrl != null || _mobileCtrl != null) {
+      await _runScript('window.stopCurrentAudio?.();');
+    }
+  }
+
+  Future<void> playAudio(Uint8List bytes, {String? reactionId}) async {
+    final generation = ++_audioGeneration;
+    _playback?.cancel();
+    final deadline = DateTime.now().add(const Duration(seconds: 15));
+    while (!_vrmReady &&
+        mounted &&
+        !_loadFailed &&
+        generation == _audioGeneration &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!mounted || generation != _audioGeneration) return;
+    if (!_vrmReady) throw StateError('角色播放器加载未完成，请加载后重试语音');
+    final directory = await getApplicationDocumentsDirectory();
+    if (!mounted || generation != _audioGeneration) return;
+    final id = '${DateTime.now().microsecondsSinceEpoch}_$generation';
+    final file = File('${directory.path}/vrm/speech_$id.wav');
+    AudioPlayback? playback;
+    try {
+      await file.writeAsBytes(bytes, flush: true);
+      if (!mounted || generation != _audioGeneration) return;
+      playback = AudioPlayback(id, bytes, onStarted: () {
+        if (mounted && generation == _audioGeneration) {
+          widget.onAudioStarted?.call();
+        }
+      });
+      _playback = playback;
+      // Listen before dispatch: events can arrive while executeScript is pending.
+      await Future.wait<void>([
+        playback.done,
+        _runScript(
+            'window.playSpeech(${jsonEncode('http://127.0.0.1:$_port/speech_$id.wav')},${jsonEncode(id)},${jsonEncode(reactionId)});'),
+      ], eagerError: true);
+    } finally {
+      playback?.cancel();
+      if (identical(_playback, playback)) _playback = null;
+      try {
+        if (mounted) {
+          await _runScript('window.stopAudioRequest?.(${jsonEncode(id)});');
+        }
+      } catch (_) {/* The original playback error is reported to the caller. */}
+      try {
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
+  }
+
   bool _vrmReady = false;
   bool _loadFailed = false;
   String _lastError = '';
   static HttpServer? _server;
   static int _port = 0;
-  bool _modelLoadStarted = false;
   StreamSubscription<dynamic>? _webMessageSub;
 
   /// Public accessors so parent can send JS commands to the WebView
@@ -77,18 +170,33 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
   WebViewController? get mobileController => _mobileCtrl;
 
   static const _charModels = {
-    '温柔学姐': 'senpai.vrm', '活泼青梅': 'genki.vrm',
-    '傲娇同桌': 'tsundere.vrm', '知性御姐': 'oneesan.vrm',
-    '治愈邻家': 'iyashi.vrm', '拉姆': 'ram.vrm', '蕾姆': 'rem.vrm',
+    '温柔学姐': 'senpai.vrm',
+    '活泼青梅': 'genki.vrm',
+    '傲娇同桌': 'tsundere.vrm',
+    '知性御姐': 'oneesan.vrm',
+    '治愈邻家': 'iyashi.vrm',
+    '拉姆': 'ram.vrm',
+    '蕾姆': 'rem.vrm',
   };
   static const _jsFiles = [
-    'three.module.js', 'three-vrm.module.js', 'three-vrm-animation.module.js',
-    'GLTFLoader.js', 'OrbitControls.js', 'BufferGeometryUtils.js',
+    'three.module.js',
+    'three-vrm.module.js',
+    'three-vrm-animation.module.js',
+    'GLTFLoader.js',
+    'OrbitControls.js',
+    'BufferGeometryUtils.js',
   ];
   static const _vrmaFiles = [
-    'angry.vrma', 'clapping.vrma', 'happy idle.vrma', 'Head Shake idle.vrma',
-    'idle.vrma', 'sad idle.vrma', 'Shaking Head No.vrma', 'Standing Greeting.vrma',
-    'Thankful.vrma', 'Yawn.vrma',
+    'angry.vrma',
+    'clapping.vrma',
+    'happy idle.vrma',
+    'Head Shake idle.vrma',
+    'idle.vrma',
+    'sad idle.vrma',
+    'Shaking Head No.vrma',
+    'Standing Greeting.vrma',
+    'Thankful.vrma',
+    'Yawn.vrma',
   ];
 
   @override
@@ -133,6 +241,13 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
         }
       }
 
+      // Application-owned code must be refreshed so installed builds use new tuning.
+      for (final name in ['lip-sync.js', 'emotion-driver.js']) {
+        final data = await rootBundle.load('assets/web/js/$name');
+        await File('${jsDir.path}/$name')
+            .writeAsBytes(data.buffer.asUint8List());
+      }
+
       // 只复制不存在的 VRMA 动画文件
       final animDir = Directory('${vrmDir.path}/animations');
       if (!await animDir.exists()) await animDir.create(recursive: true);
@@ -147,17 +262,22 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       // 复制 wlipsync-processor.js (lip-sync AudioWorklet)
       final lipsyncFile = File('assets/web/js/wlipsync-processor.js');
       if (await lipsyncFile.exists()) {
-        final data = await rootBundle.load('assets/web/js/wlipsync-processor.js');
-        await File('${jsDir.path}/wlipsync-processor.js').writeAsBytes(data.buffer.asUint8List());
+        final data =
+            await rootBundle.load('assets/web/js/wlipsync-processor.js');
+        await File('${jsDir.path}/wlipsync-processor.js')
+            .writeAsBytes(data.buffer.asUint8List());
         debugPrint('VRM: Copied wlipsync-processor.js');
       }
       // 复制 services 目录 (gesture-engine.js, ws-blendshape-client.js)
       final servicesDir = Directory('${vrmDir.path}/services');
-      if (!await servicesDir.exists()) await servicesDir.create(recursive: true);
+      if (!await servicesDir.exists()) {
+        await servicesDir.create(recursive: true);
+      }
       for (final svcName in ['gesture-engine.js', 'ws-blendshape-client.js']) {
         try {
           final data = await rootBundle.load('assets/web/services/$svcName');
-          await File('${servicesDir.path}/$svcName').writeAsBytes(data.buffer.asUint8List());
+          await File('${servicesDir.path}/$svcName')
+              .writeAsBytes(data.buffer.asUint8List());
           debugPrint('VRM: Copied service: $svcName');
         } catch (e) {
           debugPrint('VRM: Service file not found: $svcName ($e)');
@@ -177,22 +297,31 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
             debugPrint('VRM Server: Request for: ${request.url.path}');
             if (await f.exists()) {
               final bytes = await f.readAsBytes();
-              final mime = p.endsWith('.vrm') ? 'application/octet-stream'
-                  : p.endsWith('.vrma') ? 'application/octet-stream'
-                  : p.endsWith('.js') ? 'application/javascript'
-                  : p.endsWith('.html') ? 'text/html; charset=utf-8'
-                  : p.endsWith('.wav') ? 'audio/wav'
-                  : p.endsWith('.mp3') ? 'audio/mpeg'
-                  : 'text/plain';
+              final mime = p.endsWith('.vrm')
+                  ? 'application/octet-stream'
+                  : p.endsWith('.vrma')
+                      ? 'application/octet-stream'
+                      : p.endsWith('.js')
+                          ? 'application/javascript'
+                          : p.endsWith('.html')
+                              ? 'text/html; charset=utf-8'
+                              : p.endsWith('.wav')
+                                  ? 'audio/wav'
+                                  : p.endsWith('.mp3')
+                                      ? 'audio/mpeg'
+                                      : 'text/plain';
               return shelf.Response.ok(bytes, headers: {
                 'Content-Type': mime,
                 'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-store',
               });
             }
             debugPrint('VRM Server: File not found: $p');
             return shelf.Response.notFound('');
           },
-          InternetAddress('127.0.0.1'), 0, shared: true,
+          InternetAddress('127.0.0.1'),
+          0,
+          shared: true,
         );
         _port = _server!.port;
         debugPrint('VRM: Server started on port: $_port');
@@ -202,7 +331,9 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       String modelFile;
       if (widget.modelPath != null && widget.modelPath!.isNotEmpty) {
         final extracted = widget.modelPath!.split('/').last;
-        modelFile = extracted.isNotEmpty ? extracted : (_charModels[widget.characterName] ?? 'senpai.vrm');
+        modelFile = extracted.isNotEmpty
+            ? extracted
+            : (_charModels[widget.characterName] ?? 'senpai.vrm');
       } else {
         modelFile = _charModels[widget.characterName] ?? 'senpai.vrm';
       }
@@ -219,39 +350,55 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           debugPrint('VRM: Windows WebView initialized');
         } catch (e) {
           debugPrint('VRM: WebView init failed: $e');
-          setState(() { _loadFailed = true; _lastError = 'WebView init failed: $e'; });
+          setState(() {
+            _loadFailed = true;
+            _lastError = 'WebView init failed: $e';
+          });
           return;
         }
 
         _webMessageSub = _windowsCtrl!.webMessage.listen((message) {
           debugPrint('VRM: Message from Windows WebView: $message');
+          if (message is String) _playback?.handle(message);
           if (message == 'vrm_loaded') {
             debugPrint('VRM: Model loaded successfully!');
-            setState(() { _vrmReady = true; _loadFailed = false; });
+            setState(() {
+              _vrmReady = true;
+              _loadFailed = false;
+            });
+            _runScript(
+                "setExpression('_emotion','${widget.currentEmotion.name}')");
             // 设置背景
             if (widget.backgroundId != null) {
-              _windowsCtrl?.executeScript('setBackground("${widget.backgroundId}")');
+              _windowsCtrl
+                  ?.executeScript('setBackground("${widget.backgroundId}")');
             }
           } else if (message == 'vrm_ready') {
             debugPrint('VRM: WebView ready, loading model: $base/$modelFile');
-            _modelLoadStarted = true;
             // Set base URL in viewer
             _windowsCtrl!.executeScript('window._vrmBaseUrl = "$base";');
-            _windowsCtrl!.executeScript('window._characterName="${widget.characterName}";loadModel("$base/$modelFile")');
+            _windowsCtrl!.executeScript(
+                'window._characterName="${widget.characterName}";loadModel("$base/$modelFile")');
             // Add timeout to prevent infinite loading
             Future.delayed(const Duration(seconds: 15), () {
               if (!_vrmReady && !_loadFailed && mounted) {
                 debugPrint('VRM: Loading timeout');
-                setState(() { _loadFailed = true; _lastError = '加载超时'; });
+                setState(() {
+                  _loadFailed = true;
+                  _lastError = '加载超时';
+                });
               }
             });
           } else if (message.startsWith('vrm_error:')) {
             debugPrint('VRM: Error: $message');
-            setState(() { _loadFailed = true; _lastError = message; });
+            setState(() {
+              _loadFailed = true;
+              _lastError = message;
+            });
           }
         });
 
-        await _windowsCtrl!.loadUrl('$base/viewer.html');
+        await _windowsCtrl!.loadUrl('$base/viewer.html?wheelRouting=flutter');
       } else {
         // Use webview_flutter for mobile
         _mobileCtrl = WebViewController()
@@ -260,7 +407,8 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           ..enableZoom(true)
           ..setNavigationDelegate(NavigationDelegate(
             onWebResourceError: (error) {
-              debugPrint('VRM WebView Error: ${error.description} (${error.errorCode})');
+              debugPrint(
+                  'VRM WebView Error: ${error.description} (${error.errorCode})');
             },
             onPageFinished: (url) {
               debugPrint('VRM WebView Page finished: $url');
@@ -268,27 +416,40 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           ))
           ..addJavaScriptChannel('flutter', onMessageReceived: (msg) {
             debugPrint('VRM: Message from Mobile WebView: ${msg.message}');
+            _playback?.handle(msg.message);
             if (msg.message == 'vrm_loaded') {
               debugPrint('VRM: Model loaded successfully!');
-              setState(() { _vrmReady = true; _loadFailed = false; });
+              setState(() {
+                _vrmReady = true;
+                _loadFailed = false;
+              });
+              _runScript(
+                  "setExpression('_emotion','${widget.currentEmotion.name}')");
               // 设置背景
               if (widget.backgroundId != null) {
-                _mobileCtrl?.runJavaScript('setBackground("${widget.backgroundId}")');
+                _mobileCtrl
+                    ?.runJavaScript('setBackground("${widget.backgroundId}")');
               }
             } else if (msg.message == 'vrm_ready') {
               debugPrint('VRM: WebView ready, loading model: $base/$modelFile');
-              _modelLoadStarted = true;
-              _mobileCtrl?.runJavaScript('window._characterName="${widget.characterName}";loadModel("$base/$modelFile")');
+              _mobileCtrl?.runJavaScript(
+                  'window._characterName="${widget.characterName}";loadModel("$base/$modelFile")');
               // Add timeout to prevent infinite loading
               Future.delayed(const Duration(seconds: 15), () {
                 if (!_vrmReady && !_loadFailed && mounted) {
                   debugPrint('VRM: Loading timeout');
-                  setState(() { _loadFailed = true; _lastError = '加载超时'; });
+                  setState(() {
+                    _loadFailed = true;
+                    _lastError = '加载超时';
+                  });
                 }
               });
             } else if (msg.message.startsWith('vrm_error:')) {
               debugPrint('VRM: Error: ${msg.message}');
-              setState(() { _loadFailed = true; _lastError = msg.message; });
+              setState(() {
+                _loadFailed = true;
+                _lastError = msg.message;
+              });
             }
           })
           ..loadRequest(Uri.parse('$base/viewer.html'));
@@ -303,12 +464,17 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       setState(() {});
     } catch (e) {
       debugPrint('VRM: Error initializing: $e');
-      setState(() { _loadFailed = true; _lastError = e.toString(); });
+      setState(() {
+        _loadFailed = true;
+        _lastError = e.toString();
+      });
     }
   }
 
   @override
   void dispose() {
+    ++_audioGeneration;
+    _playback?.cancel();
     _webMessageSub?.cancel();
     _windowsCtrl?.dispose();
     // webview_flutter 的 WebViewController 无公开 dispose，随 widget 销毁即可
@@ -344,7 +510,9 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       }
     }
     // 背景变化时立即应用
-    if (old.backgroundId != widget.backgroundId && _vrmReady && widget.backgroundId != null) {
+    if (old.backgroundId != widget.backgroundId &&
+        _vrmReady &&
+        widget.backgroundId != null) {
       if (Platform.isWindows) {
         _windowsCtrl?.executeScript('setBackground("${widget.backgroundId}")');
       } else {
@@ -354,20 +522,29 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
   }
 
   Future<void> _reloadModel() async {
-    setState(() { _vrmReady = false; _loadFailed = false; });
+    await stopAudio();
+    if (!mounted) return;
+    setState(() {
+      _vrmReady = false;
+      _loadFailed = false;
+    });
     String m;
     if (widget.modelPath != null && widget.modelPath!.isNotEmpty) {
       final extracted = widget.modelPath!.split('/').last;
-      m = extracted.isNotEmpty ? extracted : (_charModels[widget.characterName] ?? 'senpai.vrm');
+      m = extracted.isNotEmpty
+          ? extracted
+          : (_charModels[widget.characterName] ?? 'senpai.vrm');
     } else {
       m = _charModels[widget.characterName] ?? 'senpai.vrm';
     }
     final url = 'http://127.0.0.1:$_port/$m';
 
     if (Platform.isWindows) {
-      _windowsCtrl?.executeScript('window._characterName="${widget.characterName}";loadModel("$url")');
+      _windowsCtrl?.executeScript(
+          'window._characterName="${widget.characterName}";loadModel("$url")');
     } else {
-      _mobileCtrl?.runJavaScript('window._characterName="${widget.characterName}";loadModel("$url")');
+      _mobileCtrl?.runJavaScript(
+          'window._characterName="${widget.characterName}";loadModel("$url")');
     }
   }
 
@@ -375,13 +552,17 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: () { HapticFeedback.lightImpact(); widget.onTap?.call(); },
+      onTap: () {
+        HapticFeedback.lightImpact();
+        widget.onTap?.call();
+      },
       child: Container(
         width: double.infinity,
         height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter, end: Alignment.bottomCenter,
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
             colors: [Color(0xFFFFF0F3), Color(0xFFFFDEE9), Color(0xFFE8E0F0)],
           ),
         ),
@@ -394,17 +575,25 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
             WebViewWidget(controller: _mobileCtrl!),
           // Loading indicator
           if (!_vrmReady && !_loadFailed)
-            const Center(child: CircularProgressIndicator(color: Color(0xFFFF69B4))),
+            const Center(
+                child: CircularProgressIndicator(color: Color(0xFFFF69B4))),
           // Error indicator
           if (_loadFailed)
-            Center(child: Padding(padding: const EdgeInsets.all(16),
+            Center(
+                child: Padding(
+              padding: const EdgeInsets.all(16),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.error_outline, size: 48, color: Colors.white54),
+                const Icon(Icons.error_outline,
+                    size: 48, color: Colors.white54),
                 const SizedBox(height: 8),
-                Text(widget.characterName, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                Text(widget.characterName,
+                    style: const TextStyle(color: Colors.white, fontSize: 18)),
                 if (_lastError.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  Text(_lastError.replaceFirst('vrm_error:', ''), style: const TextStyle(color: Colors.white54, fontSize: 10), textAlign: TextAlign.center),
+                  Text(_lastError.replaceFirst('vrm_error:', ''),
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 10),
+                      textAlign: TextAlign.center),
                 ],
               ]),
             )),

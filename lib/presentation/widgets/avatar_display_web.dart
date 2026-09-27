@@ -6,19 +6,21 @@ import 'dart:ui_web' as ui_web;
 final poseVersionProvider = StateProvider<int>((ref) => 0);
 
 enum Emotion {
-  happy, shy, angry, sad, surprised, neutral,
+  happy, shy, angry, sad, surprised, neutral, refuse, thankful,
 }
 
 const Map<Emotion, String> emotionExprNames = {
   Emotion.happy: 'happy', Emotion.shy: 'shy',
   Emotion.angry: 'angry', Emotion.sad: 'sad',
   Emotion.surprised: 'surprised', Emotion.neutral: 'neutral',
+  Emotion.refuse: 'refuse', Emotion.thankful: 'thankful',
 };
 
 const Map<Emotion, String> emotionToBodyLang = {
   Emotion.happy: 'happy', Emotion.shy: 'shy',
   Emotion.angry: 'angry', Emotion.sad: 'sad',
   Emotion.surprised: 'surprised', Emotion.neutral: 'neutral',
+  Emotion.refuse: 'refuse', Emotion.thankful: 'thankful',
 };
 
 class AvatarDisplay extends StatefulWidget {
@@ -30,7 +32,7 @@ class AvatarDisplay extends StatefulWidget {
   const AvatarDisplay({
     super.key,
     required this.characterName,
-    this.currentEmotion = Emotion.happy,
+    this.currentEmotion = Emotion.neutral,
     this.onTap,
     this.poseVersion = 0,
   });

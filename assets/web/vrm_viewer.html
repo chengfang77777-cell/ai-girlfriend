@@ -11,6 +11,7 @@ canvas{display:block}
 <script type="importmap">
 {"imports":{"three":"/js/three.module.js","three/addons/loaders/GLTFLoader.js":"/js/GLTFLoader.js","three/addons/controls/OrbitControls.js":"/js/OrbitControls.js"}}
 </script>
+<script src="js/emotion-driver.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from '/js/OrbitControls.js';
@@ -47,18 +48,9 @@ const ANIMATIONS = {
   thankful: ['Thankful.vrma'],
 };
 
-// Emotion to expression mapping
-const EMOTION_EXPRESSIONS = {
-  happy: { happy: 0.55, sad: 0, angry: 0, surprised: 0 },
-  sad: { happy: 0, sad: 1.0, angry: 0, surprised: 0 },
-  angry: { happy: 0, sad: 0, angry: 1.0, surprised: 0 },
-  surprised: { happy: 0, sad: 0, angry: 0, surprised: 1.0 },
-  neutral: { happy: 0, sad: 0, angry: 0, surprised: 0 },
-  // 复合情绪：害羞=浅浅开心，感动=开心，拒绝=略不悦
-  shy: { happy: 0.3, sad: 0, angry: 0, surprised: 0 },
-  thankful: { happy: 0.55, sad: 0, angry: 0, surprised: 0 },
-  refuse: { happy: 0, sad: 0, angry: 0.4, surprised: 0 },
-};
+// One persistent facial driver, shared by action and Flutter emotion entry points.
+const EMOTION_EXPRESSIONS = window.EmotionDriver.PROFILES;
+const emotionDriver = window.EmotionDriver.createDriver({now: () => performance.now() / 1000});
 
 // Animation cache
 const _animationCache = {};
@@ -210,64 +202,9 @@ function stopAnimation() {
   _currentAnimName = null;
 }
 
-// 表情自动恢复中立：情绪表情展示几秒后自动回到 neutral，避免表情定格不动
-let _emotionResetTimer = null;
-function _scheduleEmotionReset(ms) {
-  if (_emotionResetTimer) { clearTimeout(_emotionResetTimer); _emotionResetTimer = null; }
-  _emotionResetTimer = setTimeout(() => {
-    _emotionResetTimer = null;
-    setEmotion('neutral');
-  }, ms || 5000);
-}
-function _cancelEmotionReset() {
-  if (_emotionResetTimer) { clearTimeout(_emotionResetTimer); _emotionResetTimer = null; }
-}
-
-// ===== 表情平滑过渡系统 =====
-// 情绪表情不再瞬时 setValue，而是设定目标值后在 animate 循环里逐帧指数趋近，
-// 收敛后释放该通道（交还给眨眼/微表情/口型系统），表情切换像真人一样渐变。
-const _exprLerp = {};        // key -> target
-const EXPR_LERP_SPEED = 3.0; // 指数趋近速度（约0.5s过渡完成）
-
-function _setExpressionTargets(map) {
-  const em = currentVrm && currentVrm.expressionManager;
-  if (!em) return;
-  for (const k of Object.keys(map)) {
-    // 只驱动模型真实拥有的表情通道，避免 three-vrm 报警告
-    if (em.expressionMap && !(k in em.expressionMap)) continue;
-    _exprLerp[k] = map[k];
-  }
-}
-
-function _updateExpressionLerp(dt) {
-  const em = currentVrm && currentVrm.expressionManager;
-  if (!em) return;
-  for (const k of Object.keys(_exprLerp)) {
-    const target = _exprLerp[k];
-    const cur = em.getValue(k) || 0;
-    const nv = cur + (target - cur) * Math.min(1, dt * EXPR_LERP_SPEED);
-    if (Math.abs(nv - target) < 0.015) {
-      em.setValue(k, target);
-      delete _exprLerp[k]; // 收敛，释放通道
-    } else {
-      em.setValue(k, nv);
-    }
-  }
-}
-
-function setEmotion(emotion) {
-  _emotion = emotion;
-  console.log('[VRMA] setEmotion called with:', emotion);
-  if (!currentVrm || !currentVrm.expressionManager) {
-    console.log('[VRMA] No VRM or expressionManager');
-    return;
-  }
-  const expr = EMOTION_EXPRESSIONS[emotion] || EMOTION_EXPRESSIONS.neutral;
-  // 已知情绪通道先平滑归零，再叠加目标表情（全程插值，无跳变）
-  // 说话（口型播放）时由 _applyEmotionWeights 自动衰减表情权重，避免与 viseme 叠加成奇怪嘴型
-  _emotionBaseWeights = { ...expr };
-  _setExpressionTargets({ happy: 0, sad: 0, angry: 0, surprised: 0, shy: 0, blush: 0 });
-  _applyEmotionWeights();
+function setEmotion(emotion, replyId) {
+  _emotion = window.EmotionDriver.normalize(emotion);
+  emotionDriver.setEmotion(_emotion, replyId);
 }
 
 async function startGreeting() {
@@ -368,33 +305,26 @@ const ACTION_MAP = {
 // - action 命中 ACTION_MAP 且有动画文件 -> 播放该动作，播完回到待机
 // - 未命中（talk / 未知）-> 不打断，保持待机与口型（避免每句话都“演”一下，太浮夸）
 // 面部表情由 Emotion（setExpression）驱动，这里只负责身体动作
-async function triggerAction(actionName, emotion) {
+async function triggerAction(actionName, emotion, replyId) {
   console.log('[VRMA] triggerAction called with:', actionName, 'emotion:', emotion);
-  if (!_isGreetingDone) {
-    console.log('[VRMA] Greeting not done yet, skipping');
-    return;
-  }
   const key = (actionName || 'talk').toLowerCase();
   const map = ACTION_MAP[key];
   const faceEmotion = (emotion && EMOTION_EXPRESSIONS[emotion])
     ? emotion
     : (map ? map.emotion : 'neutral');
+  setEmotion(faceEmotion, replyId);
+  if (!_isGreetingDone) return;
 
   if (!map || !map.anim) {
-    // 无明确身体动作：保持待机与口型，表情短暂展示后自动回中立
+    // 无明确身体动作：保持待机，面部心情短暂展示后淡回中立
     console.log('[VRMA] No body action for:', key, '-> keep idle');
-    setEmotion(faceEmotion);
-    if (faceEmotion !== 'neutral') _scheduleEmotionReset();
     return;
   }
 
   _isInConversation = true;
   stopIdleTimer();
   clearIdleCycleTimer();
-  _cancelEmotionReset(); // 动作期间由播完回调负责恢复表情，取消定时器
   // 面部表情跟随身体动作（优先用调用方传入的 emotion，否则用映射里的情绪）
-  setEmotion(faceEmotion);
-
   const anim = map.anim;
   console.log('[VRMA] Playing body action:', anim);
   // 情绪/身体动作交叉淡入；clampWhenFinished=true 让动作播完“保持”最后一帧，
@@ -402,14 +332,12 @@ async function triggerAction(actionName, emotion) {
   // loadClip 已把动作手臂轨道首尾帧对齐到待机姿势，衔接无缝。
   const ok = await playAnimation(anim, false, () => {
     console.log('[VRMA] Body action done, back to idle');
-    setEmotion('neutral'); // 表情恢复中立
     _isInConversation = false;
     playIdleAnimation();   // 平滑交叉淡入回待机
   }, true);
   // VRMA 加载/播放失败时也要回到待机，避免模型卡在静止姿势
   if (!ok) {
     console.log('[VRMA] Body action failed, returning to idle');
-    setEmotion('neutral');
     _isInConversation = false;
     playIdleAnimation();
   }
@@ -422,6 +350,7 @@ async function triggerEmotionAnimation(emotion) {
 
 // 用户发送消息时调用，标记对话状态
 function onUserSendMessage() {
+  setEmotion('neutral');
   console.log('[VRMA] User sent message, entering conversation');
   _isInConversation = true;
   stopIdleTimer();
@@ -441,6 +370,7 @@ function onConversationComplete() {
 window.playAnimation = playAnimation;
 window.stopAnimation = stopAnimation;
 window.setEmotion = setEmotion;
+window.startSpeechReaction = replyId => emotionDriver.startSpeech(replyId);
 window.triggerAction = triggerAction;
 window.triggerEmotionAnimation = triggerEmotionAnimation;
 window.startGreeting = startGreeting;
@@ -459,8 +389,7 @@ function sendToFlutter(message) {
 }
 
 let scene,camera,renderer,controls,currentVrm,clock=new THREE.Clock();
-let _activeEmotion='neutral';
-window.window._isLipSyncPlaying = false;  // 全局变量，用于标记 lip-sync 是否在播放
+window._isLipSyncPlaying = false;  // 全局变量，用于标记 lip-sync 是否在播放
 
 // Background system
 let _bgCanvas, _bgCtx, _bgParticles=[];
@@ -521,13 +450,36 @@ controls.enableZoom=true;
 controls.minDistance=1.0;controls.maxDistance=4;controls.maxPolarAngle=Math.PI*0.6;
 controls.minPolarAngle=Math.PI*0.35;controls.update();
 
-// 缩放统一由 OrbitControls 处理（桌面滚轮 + 移动端双指捏合），无需自定义 wheel 监听
+// BEGIN WHEEL_ROUTING
+// Windows receives the modifier in Flutter; its WebView plugin forwards raw
+// wheels without keyboard modifiers. Suppress that duplicate native route.
+const flutterWheelRouting = new URLSearchParams(window.location.search).get('wheelRouting') === 'flutter';
+window.zoomModelByWheel = function(deltaY) {
+  if (!Number.isFinite(deltaY) || deltaY === 0) return;
+  const offset = camera.position.clone().sub(controls.target);
+  const distance = offset.length();
+  if (distance === 0) return;
+  const factor = Math.exp(Math.max(-240, Math.min(240, deltaY)) * 0.0015);
+  const nextDistance = Math.max(controls.minDistance, Math.min(controls.maxDistance, distance * factor));
+  camera.position.copy(controls.target).add(offset.multiplyScalar(nextDistance / distance));
+  controls.update();
+};
+renderer.domElement.addEventListener('wheel', function(event) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!flutterWheelRouting && event.ctrlKey) {
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1;
+    window.zoomModelByWheel(event.deltaY * unit);
+  }
+}, { capture: true, passive: false });
+// END WHEEL_ROUTING
 
 const loader=new GLTFLoader();
 loader.register(p=>new VRMLoaderPlugin(p));
 loader.register(p=>new VRMAnimationLoaderPlugin(p));
 
 async function loadModel(path) {
+  setEmotion('neutral');
   if(currentVrm){scene.remove(currentVrm.scene);currentVrm=null;}
   try{
     const res=await fetch(path);
@@ -585,6 +537,7 @@ async function loadModel(path) {
 
 // Alternative: load from ArrayBuffer
 async function loadModelFromBuffer(buffer) {
+  setEmotion('neutral');
   if(currentVrm){scene.remove(currentVrm.scene);currentVrm=null;}
   try{
     const gltf=await loader.parseAsync(buffer,'model.vrm');
@@ -781,41 +734,18 @@ function animate(){
     const blink=blinkCycle<0.15?Math.sin(blinkCycle/0.15*Math.PI):(blinkCycle>3.8&&blinkCycle<3.95?Math.sin((blinkCycle-3.8)/0.15*Math.PI)*0.7:0);
     currentVrm.expressionManager?.setValue('blink',blink);
 
-    // Idle micro-expressions - 更自然的待机动画
-    if(_activeEmotion==='neutral'){
-      // 使用正弦波产生自然的微表情
-      const microT = t * 0.5;  // 放慢速度
-
-      // 微笑 - 更自然的波动（跳过正在被插值系统驱动的通道，避免互相打架、永不收敛）
-      if(!('happy' in _exprLerp)){
-        const smileWave = Math.sin(microT * 0.7) * 0.03 + 0.02;
-        currentVrm.expressionManager?.setValue('happy', smileWave);
-      }
-
-      // 微微惊讶 - 偶尔出现
-      if(!('surprised' in _exprLerp)){
-        const surpriseWave = Math.sin(microT * 0.3 + 1) > 0.8 ? 0.03 : 0;
-        currentVrm.expressionManager?.setValue('surprised', surpriseWave);
-      }
-
-      // 脸红 - 偶尔出现
-      if(!('blush' in _exprLerp)){
-        const blushWave = Math.sin(microT * 0.4 + 2) > 0.7 ? 0.04 : 0;
-        currentVrm.expressionManager?.setValue('blush', blushWave);
-      }
-
-      // 不设置 aa，避免待机时露牙齿
-    }
-
-    // 动作权重缓动 + 表情插值（丝滑过渡，须在 mixer.update 前设置权重）
     _updateFades(dt);
-    _updateExpressionLerp(dt);
 
     // Update animation mixer
     if (_animationMixer) {
       _animationMixer.update(dt);
     }
 
+    // Facial mood follows animation tracks; blink and mouth keep separate ownership.
+    emotionDriver.update(currentVrm.expressionManager, dt, window._isLipSyncPlaying);
+    currentVrm.expressionManager?.setValue('blink',blink);
+    // Apply mouth weights after animation tracks, once per rendered frame.
+    if (window.updateLipSync) window.updateLipSync(dt);
     currentVrm.update(dt);
   }
   renderer.render(scene,camera);
@@ -837,64 +767,9 @@ function _saveDefaultPose(){
     .forEach(n=>{const node=b.getNormalizedBoneNode(n);if(node)_defaultBoneRotations[n]=node.rotation.clone()});
 }
 
-// Emotion-driven expression + body language
-let _emotionBaseWeights = {};   // 当前情绪的原始表情权重（未衰减）
-// 口型播放期间的情绪表情衰减系数：
-// happy/sad 等表情自带嘴部变形，若与 viseme 同时叠加会扭成奇怪嘴型，
-// 说话时把表情权重压到 25%（嘴型交给口型系统），播放结束自动恢复。
-const LIP_FACE_ATTENUATION = 0.25;
-
-function _applyEmotionWeights(){
-  if(!currentVrm)return;
-  const factor = window._isLipSyncPlaying ? LIP_FACE_ATTENUATION : 1.0;
-  const scaled = {};
-  for(const k of Object.keys(_emotionBaseWeights)){
-    scaled[k] = _emotionBaseWeights[k] * factor;
-  }
-  _setExpressionTargets(scaled);
-}
-// 供口型系统在开始/结束说话时刷新表情权重
-window.refreshExpressionWeights = _applyEmotionWeights;
-
-function _updateEmotion(emotion){
-  if(!currentVrm)return;
-  const em=currentVrm.expressionManager;
-  const b=currentVrm.humanoid;
-  if(!em||!b)return;
-
-  // 1. Reset all expressions（平滑归零，交给插值系统逐帧过渡）
-  try {
-    if(em.expressionMap) {
-      const reset={};
-      if(typeof em.expressionMap.forEach==='function') {
-        em.expressionMap.forEach((_,k)=>{reset[k]=0});
-      } else if(typeof em.expressionMap==='object') {
-        for(const k of Object.keys(em.expressionMap)){reset[k]=0}
-      }
-      _setExpressionTargets(reset);
-    }
-  } catch(_) {}
-
-  // 2. Emotion: facial only — pose handled by randomPose, no bone changes（平滑到目标）
-  let on={};
-  switch(emotion){
-  case'happy': on={happy:0.55}; break;
-  case'shy': on={shy:1.0,blush:1.0}; break;
-  case'angry': on={angry:1.0}; break;
-  case'sad': on={sad:1.0}; break;
-  case'surprised': on={surprised:1.0}; break;
-  default: on={neutral:1.0}; break;
-  }
-  _emotionBaseWeights = on;
-  _applyEmotionWeights();
-  _activeEmotion=emotion;
-  // 非中立表情展示几秒后自动恢复中立，避免表情定格不动
-  if(emotion&&emotion!=='neutral')_scheduleEmotionReset();
-}
-
 window.setExpression=(name,value)=>{
   if(name==='_emotion'){
-    _updateEmotion(value);
+    setEmotion(value);
   }else{
     currentVrm?.expressionManager?.setValue(name,value);
   }
@@ -1279,174 +1154,142 @@ if (document.readyState === 'complete') {
 }
 </script>
 
-<!-- LIP-SYNC SYSTEM (regular script, polls window.__pendingAudioUrl) -->
+<!-- LIP-SYNC SYSTEM (audio polling only; mouth updates run in animate) -->
+<script src="js/lip-sync.js"></script>
 <script>
 (function(){
-  var audioEl = null, audioCtx = null, analyser = null;
-  var lipInterval = null;
-  var _smoothOpen = 0;
-  // 使用全局变量 window._isLipSyncPlaying
-  // 平滑后的各viseme值
-  var _smoothAa = 0, _smoothIh = 0, _smoothOh = 0, _smoothOu = 0, _smoothEe = 0;
+  'use strict';
+  var driver = window.LipSync.createDriver();
+  var mouthNames = window.LipSync.NAMES;
+  var audioEl = null, audioCtx = null, analyser = null, mediaSrc = null;
+  var waveform = null, spectrumDb = null;
+  var emptyWaveform = new Float32Array(0), emptySpectrum = new Float32Array(0);
+  var ownsMouth = false;
+  var session = 0;
+  var requestId = null;
+  function notifyAudio(kind, detail) {
+    if (!requestId) return;
+    var message = 'audio_' + kind + ':' + requestId + (detail ? ':' + detail : '');
+    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(message);
+    else if (window.flutter && window.flutter.postMessage) window.flutter.postMessage(message);
+  }
 
-  // 停止当前音频播放
-  function stopCurrentAudio() {
+  function setSpeaking(value) {
+    if (window._isLipSyncPlaying === value) return;
+    window._isLipSyncPlaying = value;
+    if (window.refreshExpressionWeights) window.refreshExpressionWeights();
+  }
+
+  function applyWeights() {
+    var manager = window.currentVrm && window.currentVrm.expressionManager;
+    if (!manager) return;
+    mouthNames.forEach(function(name) { manager.setValue(name, driver.weights[name]); });
+  }
+
+  function detachAudio() {
     if (audioEl) {
-      try {
-        audioEl.pause();
-        audioEl.currentTime = 0;
-        audioEl.src = '';
-      } catch(e) {}
+      audioEl.onended = null;
+      audioEl.onerror = null;
+      audioEl.pause();
+      audioEl.src = '';
+      audioEl = null;
     }
-    if (lipInterval) {
-      clearInterval(lipInterval);
-      lipInterval = null;
+    if (mediaSrc) {
+      mediaSrc.disconnect();
+      mediaSrc = null;
     }
-    window._isLipSyncPlaying = false;
-    // 手动停止也恢复情绪表情权重
-    if(window.refreshExpressionWeights) window.refreshExpressionWeights();
-    _smoothOpen = 0;
-    _smoothAa = 0;
-    _smoothIh = 0;
-    _smoothOh = 0;
-    _smoothOu = 0;
-    _smoothEe = 0;
-    var vrm = window.currentVrm;
-    if (vrm && vrm.expressionManager) {
-      ['aa', 'ih', 'ou', 'ee', 'oh'].forEach(function(k) {
-        try { vrm.expressionManager.setValue(k, 0); } catch(e) {}
-      });
-    }
+  }
+
+  function stopCurrentAudio() {
+    notifyAudio('stopped');
+    requestId = null;
+    session++;
+    window.__pendingAudioUrl = null;
+    detachAudio();
+    driver.reset();
+    applyWeights();
+    ownsMouth = false;
+    setSpeaking(false);
   }
   window.stopCurrentAudio = stopCurrentAudio;
 
-  function playAudio(url){
-    try{
-      if(window._isLipSyncPlaying) return;
-      window._isLipSyncPlaying = true;
-      // 说话时压低情绪表情权重，避免与 viseme 叠加出奇怪嘴型
-      if(window.refreshExpressionWeights) window.refreshExpressionWeights();
+  window.updateLipSync = function(dt) {
+    if (!ownsMouth) return;
+    var playing = audioEl && !audioEl.paused && !audioEl.ended && audioEl.readyState >= 2
+      && analyser && audioCtx.state === 'running';
+    if (playing) {
+      analyser.getFloatTimeDomainData(waveform);
+      analyser.getFloatFrequencyData(spectrumDb);
+      driver.update(waveform, spectrumDb, audioCtx.sampleRate, dt);
+    } else {
+      // Loading, buffering and completion all release without reading stale FFT data.
+      driver.update(emptyWaveform, emptySpectrum, audioCtx ? audioCtx.sampleRate : 48000, dt);
+    }
+    applyWeights();
+    if (!audioEl && mouthNames.every(function(name) { return driver.weights[name] === 0; })) {
+      ownsMouth = false;
+      setSpeaking(false);
+    }
+  };
 
-      if(audioEl){ try{audioEl.pause(); audioEl.src='';}catch(e){} }
-      audioEl = new Audio(url);
-      audioEl.onended = function(){
-        window._isLipSyncPlaying = false;
-        // 说话结束恢复情绪表情权重
-        if(window.refreshExpressionWeights) window.refreshExpressionWeights();
-        if(lipInterval){ clearInterval(lipInterval); lipInterval=null; }
-        _smoothOpen = 0;
-        _smoothAa = 0; _smoothIh = 0; _smoothOh = 0; _smoothOu = 0; _smoothEe = 0;
-        var vrm = window.currentVrm;
-        if(vrm && vrm.expressionManager){
-          ['aa','ih','ou','ee','oh'].forEach(function(k){ try{vrm.expressionManager.setValue(k,0);}catch(e){} });
-        }
-      };
-      try{
-        if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if(audioCtx.state === 'suspended') audioCtx.resume();
-        if(!analyser){ analyser = audioCtx.createAnalyser(); analyser.fftSize = 512; }
-        var mediaSrc = audioCtx.createMediaElementSource(audioEl);
-        mediaSrc.connect(analyser);
+  async function playAudio(url, id, replyId) {
+    stopCurrentAudio();
+    requestId = id || null;
+    var ticket = session;
+    ownsMouth = true;
+    setSpeaking(true);
+    var element = new Audio(url);
+    audioEl = element;
+    function fail(error) {
+      if (ticket !== session) return;
+      console.warn('[LipSync] Audio playback failed:', error);
+      notifyAudio('error', 'playback');
+      stopCurrentAudio();
+    }
+    element.onended = function() {
+      if (ticket !== session) return;
+      notifyAudio('ended');
+      requestId = null;
+      detachAudio();
+      // Keep ownership while the mouth releases; restore expression after closure.
+    };
+    element.onerror = function() { fail(element.error || 'Audio could not be loaded'); };
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      if (ticket !== session) return;
+      if (audioCtx.state !== 'running') throw new Error('Audio context is not running');
+      if (!analyser) {
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        // Smoothing belongs to the driver; avoid a second, hidden layer of FFT lag.
+        analyser.smoothingTimeConstant = 0;
         analyser.connect(audioCtx.destination);
-      }catch(e){}
-
-      _smoothOpen = 0;
-      _smoothAa = 0; _smoothIh = 0; _smoothOh = 0; _smoothOu = 0; _smoothEe = 0;
-
-      lipInterval = setInterval(function(){
-        if(!analyser || !window.currentVrm) return;
-        var data = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(data);
-
-        var sampleRate = audioCtx.sampleRate;
-        var binSize = sampleRate / analyser.fftSize;
-        var n = data.length;
-
-        // ---- 1. 总响度 (RMS) ----
-        var sumSquares = 0;
-        for(var i=0;i<n;i++){ var v=data[i]/255; sumSquares += v*v; }
-        var rms = Math.sqrt(sumSquares / n);
-
-        // ---- 2. 频谱质心（音色明暗）与分频段能量 ----
-        var lowE=0, midE=0, highE=0;
-        var centNum=0, centDen=0;
-        for(var i=0;i<n;i++){
-          var freq=i*binSize;
-          var val=data[i]/255;
-          if(val<=0) continue;
-          centNum += freq*val; centDen += val;
-          if(freq<600){ lowE+=val; }
-          else if(freq<2500){ midE+=val; }
-          else { highE+=val; }
-        }
-        var centroid = centDen>0 ? centNum/centDen : 0;
-        // 归一化质心到 0..1（约 250Hz ~ 4000Hz），越大代表越“尖/靠前的元音”
-        var cen = Math.max(0, Math.min(1, (centroid-250)/(4000-250)));
-        var lowAvg = lowE/n, midAvg = midE/n, highAvg = highE/n;
-
-        // ---- 3. 门限与响度曲线 ----
-        var GATE = 0.018;
-        if(rms < GATE){
-          // 静音：自然快速闭合
-          var c = 0.55;
-          _smoothAa += (0-_smoothAa)*c;
-          _smoothIh += (0-_smoothIh)*c;
-          _smoothOh += (0-_smoothOh)*c;
-          _smoothOu += (0-_smoothOu)*c;
-          _smoothEe += (0-_smoothEe)*c;
-        } else {
-          // 感知响度：幂曲线压缩，弱音更柔、强音更张，更接近真人
-          var loud = Math.min(1, Math.pow(rms, 0.6) * 1.7);
-          // 轻微随机抖动，避免机械感
-          var jitter = (Math.random()-0.5) * 0.06 * loud;
-
-          // 元音权重：基于频谱质心连续混合（协同发音）
-          // 低频 -> 圆唇/后元音 ou/oh；中频 -> 开口 aa；高频 -> 前/闭元音 ih/ee
-          var wAa = loud * (1 - Math.min(1, Math.abs(cen-0.5)*2)) * 0.9;
-          var wOh = loud * Math.max(0, 0.45 - cen) * 1.5;
-          var wOu = loud * Math.max(0, 0.30 - cen) * 1.9;
-          var wIh = loud * Math.max(0, cen - 0.45) * 1.1;
-          var wEe = loud * Math.max(0, cen - 0.68) * 2.0;
-
-          // 攻击快、释放略慢且自然
-          var ATTACK = 0.75, RELEASE = 0.38;
-          var sm = function(prev, tgt){
-            var k = tgt>prev ? ATTACK : RELEASE;
-            return prev + (tgt-prev)*k;
-          };
-          _smoothAa = sm(_smoothAa, Math.max(0, wAa + jitter));
-          _smoothIh = sm(_smoothIh, Math.max(0, wIh + jitter*0.6));
-          _smoothOh = sm(_smoothOh, Math.max(0, wOh + jitter*0.5));
-          _smoothOu = sm(_smoothOu, Math.max(0, wOu + jitter*0.4));
-          _smoothEe = sm(_smoothEe, Math.max(0, wEe + jitter*0.6));
-        }
-
-        // ---- 4. 应用到 VRM 表情 ----
-        var vrm = window.currentVrm;
-        if(vrm && vrm.expressionManager){
-          try{
-            // 限制幅度，开口最大约 0.9 避免穿帮
-            vrm.expressionManager.setValue('aa',  Math.min(0.9, _smoothAa));
-            vrm.expressionManager.setValue('ih',  Math.min(0.85, _smoothIh));
-            vrm.expressionManager.setValue('oh',  Math.min(0.85, _smoothOh));
-            vrm.expressionManager.setValue('ou',  Math.min(0.8,  _smoothOu));
-            vrm.expressionManager.setValue('ee',  Math.min(0.85, _smoothEe));
-          }catch(e){}
-        }
-      }, 25);  // 更高的更新频率，口型更跟手
-      audioEl.play().catch(function(e){ window._isLipSyncPlaying = false; });
-    }catch(e){ window._isLipSyncPlaying = false; }
+        waveform = new Float32Array(analyser.fftSize);
+        spectrumDb = new Float32Array(analyser.frequencyBinCount);
+      }
+      mediaSrc = audioCtx.createMediaElementSource(element);
+      mediaSrc.connect(analyser);
+      await element.play();
+      if (ticket === session) {
+        if (window.startSpeechReaction) window.startSpeechReaction(replyId);
+        notifyAudio('started');
+      }
+    } catch (error) {
+      fail(error);
+    }
   }
 
-  // Poll for audio filename from Flutter, construct full URL from _vrmBaseUrl
-  setInterval(function(){
-    if(window.__pendingAudioUrl){
-      var filename = window.__pendingAudioUrl;
-      window.__pendingAudioUrl = null;
-      var base = window._vrmBaseUrl || "";
-      var url = base + "/" + filename;
-      playAudio(url);
-    }
+  // Direct request dispatch with correlated lifecycle events.
+  window.playSpeech = function(url, id, replyId) { void playAudio(url, id, replyId); };
+  window.stopAudioRequest = function(id) { if (id === requestId) stopCurrentAudio(); };
+
+  // Compatibility for older callers; this timer never drives mouth animation.
+  setInterval(function() {
+    if (!window.__pendingAudioUrl) return;
+    var filename = window.__pendingAudioUrl;
+    window.__pendingAudioUrl = null;
+    playAudio((window._vrmBaseUrl || '') + '/' + filename);
   }, 100);
 })();
 </script>

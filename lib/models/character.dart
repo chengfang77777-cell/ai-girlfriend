@@ -81,10 +81,9 @@ class Character {
     // 用户上传了微信聊天记录 → 始终模仿记录中「对方」的说话方式
     final chatLog = wechatChatLog?.trim() ?? '';
     if (chatLog.isNotEmpty) {
-      final otherName =
-          (wechatOtherName?.trim().isNotEmpty ?? false)
-              ? wechatOtherName!.trim()
-              : '对方';
+      final otherName = (wechatOtherName?.trim().isNotEmpty ?? false)
+          ? wechatOtherName!.trim()
+          : '对方';
       buffer.writeln('');
       buffer.writeln('=== 模仿聊天记录里的「$otherName」（最重要）===');
       buffer.writeln('我上传了一段真实的微信聊天记录，里面记录了「$otherName」和我（'
@@ -117,7 +116,7 @@ class Character {
     buffer.writeln('8. 别一次抛出好几个问题，最多问一个');
     buffer.writeln('');
     buffer.writeln('=== 情绪（emotion）===');
-    buffer.writeln('按你这句话真正的语气选 emotion，别老用 neutral：');
+    buffer.writeln('按这句话实际情绪选 emotion；普通交流和温和回应默认 neutral：');
     buffer.writeln('- 开心、撒娇、甜蜜、期待 → happy（只是温和地笑，别夸张）');
     buffer.writeln('- 害羞、脸红、不好意思 → shy');
     buffer.writeln('- 真的生气、不满、被惹到了 → angry');
@@ -125,8 +124,8 @@ class Character {
     buffer.writeln('- 惊讶、意外、不敢相信 → surprised');
     buffer.writeln('- 拒绝、不要、不行 → refuse');
     buffer.writeln('- 感动、真心的感谢 → thankful');
-    buffer.writeln('- 只有平平淡淡闲聊时才用 neutral');
-    buffer.writeln('记住：语气是暖的、有情绪的，就别填 neutral。');
+    buffer.writeln('- 日常闲聊、认真倾听、解释事情、平静的关心 → neutral');
+    buffer.writeln('温暖不等于开心；没有明显情绪时保持 neutral，不要每次回答都微笑。');
     buffer.writeln('');
     buffer.writeln('=== 身体动作（action）===');
     buffer.writeln('action 表示一次性身体动作，让角色更生动，但别滥用：');
@@ -158,10 +157,12 @@ class Character {
     buffer.writeln('');
     buffer.writeln('=== 回复格式（JSON）===');
     buffer.writeln('整段回复必须是合法 JSON：');
-    buffer.writeln('{"reply": "你的回复", "emotion": "happy", "action": "talk"}');
-    buffer.writeln('emotion 取值：happy / shy / angry / sad / surprised / neutral / refuse / thankful');
-    buffer.writeln('action 取值（默认 talk）：talk / happy / sad / angry / clap / thankful / refuse / greeting / yawn');
-    buffer.writeln('语义对得上动作时一定给具体 action，对不上就用 talk。emotion 别无脑填 neutral。');
+    buffer.writeln('{"reply": "你的回复", "emotion": "neutral", "action": "talk"}');
+    buffer.writeln(
+        'emotion 取值：happy / shy / angry / sad / surprised / neutral / refuse / thankful');
+    buffer.writeln(
+        'action 取值（默认 talk）：talk / happy / sad / angry / clap / thankful / refuse / greeting / yawn');
+    buffer.writeln('动作和情绪都按语义选择；默认 action=talk、emotion=neutral，仅在明确适合时改变。');
 
     return buffer.toString();
   }
