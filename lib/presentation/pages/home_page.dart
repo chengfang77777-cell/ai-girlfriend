@@ -611,7 +611,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall),
                 ])),
-            if (Platform.isWindows && character != null)
+            if (character != null)
               FilledButton.tonalIcon(
                 onPressed: isSending ? null : _toggleStudy,
                 icon: Icon(
@@ -691,10 +691,11 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   icon: voiceStatus == null
                                       ? Icons.touch_app_outlined
                                       : Icons.graphic_eq_rounded,
-                                  text: voiceStatus ?? '拖动转身 · Ctrl + 滚轮缩放'))),
-                      if (!_studyMode &&
-                          Platform.isWindows &&
-                          character != null)
+                                  text: voiceStatus ??
+                                      (Platform.isWindows
+                                          ? '拖动转身 · Ctrl + 滚轮缩放'
+                                          : '单指拖动转身 · 双指缩放')))),
+                      if (!_studyMode && character != null)
                         Positioned(
                             right: 18,
                             bottom: 18,

@@ -185,6 +185,15 @@
   - 严格遵循系统安全删除规范，使用回收站安全删除机制将 `app-armeabi-v7a-release.apk` 与 `app-x86_64-release.apk`（含 sha1 校验文件）移入 Windows 系统回收站。
   - 当前 `build/app/outputs/flutter-apk/` 目录下仅保留现代 Android 手机专属的 [app-arm64-v8a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)（131.0 MB）。
 
+### 15. 手机端学习伴读功能解除平台限制与重新编译（2026-10-11 10:58:00）
+
+- **排错根因**：
+  - [lib/presentation/pages/home_page.dart](file:///d:/AIcursorclaude/ai_girlfriend_vrm/lib/presentation/pages/home_page.dart) 顶栏的「陪我学习」入口此前遗留了 `if (Platform.isWindows && character != null)` 判定，击掌控制组件同样遗留了 `Platform.isWindows`，导致在 Android 手机端这两项功能被硬编码隐藏。
+- **改动成果**：
+  - 彻底移除 `Platform.isWindows` 限制，使伴读模式、白噪音音乐与击掌互动在移动端与 Windows 端完全统一呈现。
+  - 适配移动端手势提示文案为「单指拖动转身 · 双指缩放」。
+  - 使用 Flutter SDK `D:\AIcursorclaude\flutter3245` 重新编译，多余分包移入回收站，输出最新的主流真机安装包 [app-arm64-v8a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)（131.2 MB，10:57 最新编译）。
+
 
 
 
