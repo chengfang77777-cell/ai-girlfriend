@@ -192,7 +192,20 @@
 - **改动成果**：
   - 彻底移除 `Platform.isWindows` 限制，使伴读模式、白噪音音乐与击掌互动在移动端与 Windows 端完全统一呈现。
   - 适配移动端手势提示文案为「单指拖动转身 · 双指缩放」。
-  - 使用 Flutter SDK `D:\AIcursorclaude\flutter3245` 重新编译，多余分包移入回收站，输出最新的主流真机安装包 [app-arm64-v8a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)（131.2 MB，10:57 最新编译）。
+### 16. GitHub Releases 发布与双端远程同步完成（2026-10-11 11:35:00）
+
+- **双端产物打包**：
+  - Windows Release 最新构建完成，并将完整运行时打包为绿色免安装压缩包 `ai_girlfriend_windows_x64.zip`（125.7 MB）。
+  - 手机端最新构建包 [app-arm64-v8a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)（131.2 MB）。
+- **远程代码与标签同步**：
+  - 成功将本地最新提交（`bc0518c`）推送到 GitHub 与 Gitee 远程主分支（`github/master`、`origin/master`）。
+  - 版本标签 `version_2.5` 已同步推送到两个远程仓库。
+- **GitHub Release 发布成功**：
+  - 发布页面：<https://github.com/chengfang77777-cell/ai-girlfriend/releases/tag/version_2.5>
+  - 成功上传资产：
+    1. `app-arm64-v8a-release.apk`（手机版）
+    2. `ai_girlfriend_windows_x64.zip`（电脑绿色版）
+
 
 
 
