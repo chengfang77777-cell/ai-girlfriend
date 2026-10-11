@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+enum BackgroundMotion { gentle, still, system }
+
 /// 背景配置类
 class BackgroundConfig {
   final String id;
@@ -27,8 +29,8 @@ class PresetBackgrounds {
   static const dreamyStarry = BackgroundConfig(
     id: 'dreamy_starry',
     name: '梦幻星空',
-    description: '深色背景 + 闪烁星星，浪漫氛围',
-    gradientColors: [Color(0xFF0F0C29), Color(0xFF302B63), Color(0xFF24243E)],
+    description: '静谧星河、轻柔微光与偶尔划过的流星',
+    gradientColors: [Color(0xFF101E2B), Color(0xFF2A3E4A), Color(0xFF536763)],
     particleType: 'stars',
   );
 
@@ -36,8 +38,8 @@ class PresetBackgrounds {
   static const sakuraFalling = BackgroundConfig(
     id: 'sakura_falling',
     name: '樱花飘落',
-    description: '粉色背景 + 飘落的花瓣，日系风格',
-    gradientColors: [Color(0xFFFFF0F5), Color(0xFFFFE4E1), Color(0xFFFFC0CB)],
+    description: '暖白春光，花瓣随风轻轻翻转',
+    gradientColors: [Color(0xFFFAF4F0), Color(0xFFEEDFDF), Color(0xFFD5CFC9)],
     particleType: 'sakura',
   );
 
@@ -45,8 +47,8 @@ class PresetBackgrounds {
   static const cozyRoom = BackgroundConfig(
     id: 'cozy_room',
     name: '温馨房间',
-    description: '暖色调房间，舒适氛围',
-    gradientColors: [Color(0xFFFFF8DC), Color(0xFFFFEFD5), Color(0xFFFFE4C4)],
+    description: '窗边的午后暖光，空气里漂浮着细小微尘',
+    gradientColors: [Color(0xFFF7F0E3), Color(0xFFEAD9BF), Color(0xFFC6BAA7)],
     particleType: 'warm_glow',
   );
 
@@ -54,8 +56,8 @@ class PresetBackgrounds {
   static const gradientGlow = BackgroundConfig(
     id: 'gradient_glow',
     name: '渐变光晕',
-    description: '柔和的彩色光晕，现代感',
-    gradientColors: [Color(0xFF667eea), Color(0xFF764ba2), Color(0xFFf093fb)],
+    description: '鼠尾草绿与淡玫瑰色，像呼吸一样缓缓流动',
+    gradientColors: [Color(0xFFEDF1E8), Color(0xFFD1DDD4), Color(0xFFDBC9C9)],
     particleType: 'glow',
   );
 
@@ -63,8 +65,8 @@ class PresetBackgrounds {
   static const freshMeadow = BackgroundConfig(
     id: 'fresh_meadow',
     name: '清新草地',
-    description: '绿色自然，清新舒适',
-    gradientColors: [Color(0xFFE8F5E9), Color(0xFFC8E6C9), Color(0xFFA5D6A7)],
+    description: '远处草坡、轻摆的草叶与点点萤光',
+    gradientColors: [Color(0xFFEFF3E8), Color(0xFFD8E4D5), Color(0xFF96AE97)],
     particleType: 'fireflies',
   );
 
@@ -72,8 +74,8 @@ class PresetBackgrounds {
   static const sunsetDusk = BackgroundConfig(
     id: 'sunset_dusk',
     name: '夕阳黄昏',
-    description: '暖色夕阳，温馨浪漫',
-    gradientColors: [Color(0xFFFF6B6B), Color(0xFFFF8E53), Color(0xFFFFD93D)],
+    description: '柔和落日、层叠远山与缓慢舒展的云层',
+    gradientColors: [Color(0xFFE3C9BC), Color(0xFFD6A190), Color(0xFF889798)],
     particleType: 'sunrays',
   );
 
@@ -81,8 +83,8 @@ class PresetBackgrounds {
   static const iceWorld = BackgroundConfig(
     id: 'ice_world',
     name: '冰雪世界',
-    description: '清凉蓝色，晶莹剔透',
-    gradientColors: [Color(0xFFE0F7FA), Color(0xFFB2EBF2), Color(0xFF80DEEA)],
+    description: '珍珠蓝的远山，细雪在不同深度轻轻飘落',
+    gradientColors: [Color(0xFFF2F6F4), Color(0xFFDBE9E9), Color(0xFFADBEC6)],
     particleType: 'snowflakes',
   );
 
@@ -90,8 +92,8 @@ class PresetBackgrounds {
   static const mysticNight = BackgroundConfig(
     id: 'mystic_night',
     name: '神秘夜空',
-    description: '深紫夜空，神秘优雅',
-    gradientColors: [Color(0xFF1A1A2E), Color(0xFF16213E), Color(0xFF0F3460)],
+    description: '深蓝夜色里，薄薄的极光与星尘缓缓流动',
+    gradientColors: [Color(0xFF0D222D), Color(0xFF163E43), Color(0xFF2E5154)],
     particleType: 'nebula',
   );
 
@@ -118,13 +120,13 @@ class PresetBackgrounds {
 
   /// 角色默认背景映射
   static const Map<String, String> characterDefaults = {
-    '温柔学姐': 'sakura_falling',      // 樱花 - 温柔
-    '活泼青梅': 'fresh_meadow',        // 草地 - 活泼
-    '傲娇同桌': 'gradient_glow',        // 渐变 - 现代
-    '知性御姐': 'dreamy_starry',        // 星空 - 优雅
-    '治愈邻家': 'cozy_room',           // 房间 - 温馨
-    '拉姆': 'ice_world',               // 冰雪 - 冷酷
-    '蕾姆': 'sunset_dusk',             // 夕阳 - 温暖
+    '温柔学姐': 'sakura_falling', // 樱花 - 温柔
+    '活泼青梅': 'fresh_meadow', // 草地 - 活泼
+    '傲娇同桌': 'gradient_glow', // 渐变 - 现代
+    '知性御姐': 'dreamy_starry', // 星空 - 优雅
+    '治愈邻家': 'cozy_room', // 房间 - 温馨
+    '拉姆': 'ice_world', // 冰雪 - 冷酷
+    '蕾姆': 'sunset_dusk', // 夕阳 - 温暖
   };
 
   /// 获取角色的默认背景

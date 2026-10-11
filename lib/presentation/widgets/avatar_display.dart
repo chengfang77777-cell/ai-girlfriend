@@ -56,11 +56,14 @@ class AvatarDisplay extends StatefulWidget {
   final VoidCallback? onTap;
   final int poseVersion;
   final String? backgroundId;
+  final String backgroundMotion;
 
   /// Action label (wave, nod, clap, …) that the AI returned with its reply.
   /// When this changes we play the matching motion clip in the VRM viewer.
   final String? action;
   final VoidCallback? onAudioStarted;
+  final ValueChanged<String>? onInteractionState;
+  final bool studyQuiet;
 
   const AvatarDisplay({
     super.key,
@@ -70,8 +73,11 @@ class AvatarDisplay extends StatefulWidget {
     this.onTap,
     this.poseVersion = 0,
     this.backgroundId,
+    this.backgroundMotion = 'gentle',
     this.action,
     this.onAudioStarted,
+    this.onInteractionState,
+    this.studyQuiet = false,
   });
 
   @override
@@ -79,6 +85,65 @@ class AvatarDisplay extends StatefulWidget {
 }
 
 class _AvatarDisplayState extends State<AvatarDisplay> {
+  static const _focusChannel = MethodChannel('ai_girlfriend/window_focus');
+
+  Future<void> _restoreInputFocus() async {
+    if (!Platform.isWindows || !mounted) return;
+    try {
+      await _focusChannel.invokeMethod<bool>('restoreInputFocus');
+    } on PlatformException catch (error) {
+      debugPrint('VRM: Could not restore input focus: $error');
+    } on MissingPluginException {
+      // Widget tests do not host the Windows runner.
+    }
+  }
+
+  Future<bool> startHighFive() async {
+    if (!_vrmReady) return false;
+    if (_windowsCtrl != null) {
+      return await _windowsCtrl!
+              .executeScript('window.startHighFive?.() === true') ==
+          true;
+    } else if (_mobileCtrl != null) {
+      final res = await _mobileCtrl!
+          .runJavaScriptReturningResult('window.startHighFive?.() === true');
+      return res == true || res == 'true';
+    }
+    return false;
+  }
+
+  Future<void> cancelHighFive() => _runScript('window.cancelHighFive?.();');
+
+  Future<void> celebrateStudyCompletion(String? replyId) =>
+      _runScript('window.celebrateStudyCompletion?.(${jsonEncode(replyId)});');
+
+  Future<void> _applyStudyQuiet() async {
+    try {
+      await _runScript('window.setStudyQuiet?.(${widget.studyQuiet});');
+    } catch (error) {
+      debugPrint('VRM: Study mode unavailable: $error');
+    }
+  }
+
+  Future<void> _applyBackgroundMotion() async {
+    try {
+      await _runScript(
+          'window.companionBackground?.setMotionMode(${jsonEncode(widget.backgroundMotion)});');
+    } catch (error) {
+      debugPrint('[Avatar] Background motion unavailable: $error');
+    }
+  }
+
+  void _handleInteractionMessage(String message) {
+    if (!mounted || !message.startsWith('interaction:')) return;
+    final state = message.substring('interaction:'.length);
+    if (const {'idle', 'raising', 'waiting', 'hit', 'returning'}
+        .contains(state)) {
+      widget.onInteractionState?.call(state);
+      if (state == 'hit' || state == 'idle') unawaited(_restoreInputFocus());
+    }
+  }
+
   // For Windows
   WebviewController? _windowsCtrl;
 
@@ -242,7 +307,12 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       }
 
       // Application-owned code must be refreshed so installed builds use new tuning.
-      for (final name in ['lip-sync.js', 'emotion-driver.js']) {
+      for (final name in [
+        'lip-sync.js',
+        'emotion-driver.js',
+        'high-five.js',
+        'companion-background.js'
+      ]) {
         final data = await rootBundle.load('assets/web/js/$name');
         await File('${jsDir.path}/$name')
             .writeAsBytes(data.buffer.asUint8List());
@@ -358,6 +428,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
         }
 
         _webMessageSub = _windowsCtrl!.webMessage.listen((message) {
+          if (message is String) _handleInteractionMessage(message);
           debugPrint('VRM: Message from Windows WebView: $message');
           if (message is String) _playback?.handle(message);
           if (message == 'vrm_loaded') {
@@ -368,12 +439,14 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
             });
             _runScript(
                 "setExpression('_emotion','${widget.currentEmotion.name}')");
+            unawaited(_applyStudyQuiet());
             // 设置背景
             if (widget.backgroundId != null) {
               _windowsCtrl
                   ?.executeScript('setBackground("${widget.backgroundId}")');
             }
           } else if (message == 'vrm_ready') {
+            unawaited(_applyBackgroundMotion());
             debugPrint('VRM: WebView ready, loading model: $base/$modelFile');
             // Set base URL in viewer
             _windowsCtrl!.executeScript('window._vrmBaseUrl = "$base";');
@@ -398,7 +471,9 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           }
         });
 
-        await _windowsCtrl!.loadUrl('$base/viewer.html?wheelRouting=flutter');
+        await _windowsCtrl!.loadUrl('$base/viewer.html?wheelRouting=flutter'
+            '&background=${Uri.encodeQueryComponent(widget.backgroundId ?? 'dreamy_starry')}'
+            '&motion=${Uri.encodeQueryComponent(widget.backgroundMotion)}');
       } else {
         // Use webview_flutter for mobile
         _mobileCtrl = WebViewController()
@@ -415,6 +490,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
             },
           ))
           ..addJavaScriptChannel('flutter', onMessageReceived: (msg) {
+            _handleInteractionMessage(msg.message);
             debugPrint('VRM: Message from Mobile WebView: ${msg.message}');
             _playback?.handle(msg.message);
             if (msg.message == 'vrm_loaded') {
@@ -425,12 +501,14 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
               });
               _runScript(
                   "setExpression('_emotion','${widget.currentEmotion.name}')");
+              unawaited(_applyStudyQuiet());
               // 设置背景
               if (widget.backgroundId != null) {
                 _mobileCtrl
                     ?.runJavaScript('setBackground("${widget.backgroundId}")');
               }
             } else if (msg.message == 'vrm_ready') {
+              unawaited(_applyBackgroundMotion());
               debugPrint('VRM: WebView ready, loading model: $base/$modelFile');
               _mobileCtrl?.runJavaScript(
                   'window._characterName="${widget.characterName}";loadModel("$base/$modelFile")');
@@ -452,7 +530,9 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
               });
             }
           })
-          ..loadRequest(Uri.parse('$base/viewer.html'));
+          ..loadRequest(Uri.parse('$base/viewer.html'
+              '?background=${Uri.encodeQueryComponent(widget.backgroundId ?? 'dreamy_starry')}'
+              '&motion=${Uri.encodeQueryComponent(widget.backgroundMotion)}'));
 
         // 允许音频自动播放（口型/语音同步），无需用户手势触发
         final platformCtrl = _mobileCtrl!.platform;
@@ -489,6 +569,12 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
   @override
   void didUpdateWidget(AvatarDisplay old) {
     super.didUpdateWidget(old);
+    if (old.backgroundMotion != widget.backgroundMotion && _vrmReady) {
+      unawaited(_applyBackgroundMotion());
+    }
+    if (old.studyQuiet != widget.studyQuiet && _vrmReady) {
+      unawaited(_applyStudyQuiet());
+    }
     if (old.characterName != widget.characterName) {
       _reloadModel();
       return;
@@ -554,6 +640,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
       behavior: HitTestBehavior.translucent,
       onTap: () {
         HapticFeedback.lightImpact();
+        unawaited(_restoreInputFocus());
         widget.onTap?.call();
       },
       child: Container(
@@ -563,7 +650,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFFFFF0F3), Color(0xFFFFDEE9), Color(0xFFE8E0F0)],
+            colors: [Color(0xFFF6F5F0), Color(0xFFEAF0E8), Color(0xFFF0E3D3)],
           ),
         ),
         child: Stack(fit: StackFit.expand, children: [
@@ -576,7 +663,7 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
           // Loading indicator
           if (!_vrmReady && !_loadFailed)
             const Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF69B4))),
+                child: CircularProgressIndicator(color: Color(0xFF527564))),
           // Error indicator
           if (_loadFailed)
             Center(
@@ -584,15 +671,16 @@ class _AvatarDisplayState extends State<AvatarDisplay> {
               padding: const EdgeInsets.all(16),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.error_outline,
-                    size: 48, color: Colors.white54),
+                    size: 48, color: Color(0xFF69786F)),
                 const SizedBox(height: 8),
                 Text(widget.characterName,
-                    style: const TextStyle(color: Colors.white, fontSize: 18)),
+                    style: const TextStyle(
+                        color: Color(0xFF293D35), fontSize: 18)),
                 if (_lastError.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(_lastError.replaceFirst('vrm_error:', ''),
-                      style:
-                          const TextStyle(color: Colors.white54, fontSize: 10),
+                      style: const TextStyle(
+                          color: Color(0xFF69786F), fontSize: 10),
                       textAlign: TextAlign.center),
                 ],
               ]),

@@ -6,6 +6,21 @@ import 'character_provider.dart';
 /// 当前背景ID状态
 final backgroundIdProvider = StateProvider<String?>((ref) => null);
 
+final backgroundMotionProvider = StateProvider<BackgroundMotion>((ref) {
+  final saved = ref
+      .read(storageServiceProvider)
+      .getSetting<String>(AppConstants.backgroundMotionKey);
+  return BackgroundMotion.values.firstWhere((mode) => mode.name == saved,
+      orElse: () => BackgroundMotion.gentle);
+});
+
+void saveBackgroundMotion(WidgetRef ref, BackgroundMotion mode) {
+  ref.read(backgroundMotionProvider.notifier).state = mode;
+  ref
+      .read(storageServiceProvider)
+      .setSetting(AppConstants.backgroundMotionKey, mode.name);
+}
+
 /// 背景变化通知器（用于触发VRM viewer更新）
 final backgroundChangeProvider = StateProvider<int>((ref) => 0);
 

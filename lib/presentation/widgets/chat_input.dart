@@ -1,21 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../core/theme.dart';
 
 /// Chat input widget with rounded text field and send button.
 ///
-/// Features a "说点什么吧..." hint, pink circular send button with
+/// Features a "说点什么吧..." hint, sage send button with
 /// paper plane icon, loading spinner while sending.
 /// Uses TextInputAction.send for keyboard submission.
 class ChatInput extends StatefulWidget {
   final ValueChanged<String>? onSend;
   final bool isLoading;
   final String? errorMessage;
+  final TextEditingController? controller;
 
   const ChatInput({
     super.key,
     this.onSend,
     this.isLoading = false,
     this.errorMessage,
+    this.controller,
   });
 
   @override
@@ -29,11 +32,25 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController();
+    _controller = widget.controller ?? TextEditingController();
     _focusNode = FocusNode();
-    _controller.addListener(() => setState(() {}));
+    _controller.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  void _onTextChanged() => setState(() {});
+
+  @override
+  void didUpdateWidget(covariant ChatInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller == widget.controller) return;
+    final previousValue = _controller.value;
+    _controller.removeListener(_onTextChanged);
+    if (oldWidget.controller == null) _controller.dispose();
+    _controller =
+        widget.controller ?? TextEditingController.fromValue(previousValue);
+    _controller.addListener(_onTextChanged);
   }
 
   void _onFocusChanged() => setState(() {});
@@ -60,8 +77,8 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _focusNode.removeListener(_onFocusChanged);
-    // _controller.dispose() 会自行清理已注册的 listener，无需手动移除
-    _controller.dispose();
+    _controller.removeListener(_onTextChanged);
+    if (widget.controller == null) _controller.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -83,20 +100,14 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
-          ),
-        ],
+        color: AppTheme.bgCardLight,
+        border: const Border(top: BorderSide(color: AppTheme.divider)),
       ),
       padding: EdgeInsets.only(
         left: 16,
         right: 16,
-        top: 8,
-        bottom: MediaQuery.of(context).padding.bottom + 8,
+        top: 12,
+        bottom: MediaQuery.of(context).padding.bottom + 12,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -121,11 +132,11 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
                 child: Container(
                   constraints: const BoxConstraints(maxHeight: 120),
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(24),
+                    color: AppTheme.bgLight,
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: _focusNode.hasFocus
-                          ? const Color(0xFFFF69B4)
+                          ? AppTheme.primaryColor
                           : Colors.transparent,
                       width: 1.5,
                     ),
@@ -140,7 +151,7 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
                     decoration: const InputDecoration(
                       hintText: '说点什么吧...',
                       hintStyle: TextStyle(
-                        color: Color(0xFFBDBDBD),
+                        color: AppTheme.textHint,
                         fontSize: 15,
                       ),
                       contentPadding: EdgeInsets.symmetric(
@@ -148,6 +159,9 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
                         vertical: 14,
                       ),
                       border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      filled: false,
                     ),
                     textCapitalization: TextCapitalization.sentences,
                     // The default send action unfocuses before onSubmitted,
@@ -159,7 +173,7 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
                     onTapOutside: (_) {},
                     style: const TextStyle(
                       fontSize: 15,
-                      color: Colors.black87,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                 ),
@@ -170,31 +184,34 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: _canSend ? const Color(0xFFFF69B4) : Colors.grey[300],
-                  borderRadius: BorderRadius.circular(24),
+                  color: _canSend ? AppTheme.primaryColor : AppTheme.border,
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(24),
-                    onTap: _canSend ? _sendMessage : null,
-                    child: Center(
-                      child: widget.isLoading
-                          ? const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.5,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
+                child: Tooltip(
+                  message: '发送消息',
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: _canSend ? _sendMessage : null,
+                      child: Center(
+                        child: widget.isLoading
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
                                 ),
+                              )
+                            : const Icon(
+                                Icons.send,
+                                color: Colors.white,
+                                size: 22,
                               ),
-                            )
-                          : const Icon(
-                              Icons.send,
-                              color: Colors.white,
-                              size: 22,
-                            ),
+                      ),
                     ),
                   ),
                 ),

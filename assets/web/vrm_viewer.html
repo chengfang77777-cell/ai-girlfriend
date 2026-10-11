@@ -4,14 +4,17 @@
 *{margin:0;padding:0;overflow:hidden}
 body{background:transparent}
 canvas{display:block}
-#bg-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1}
+#bg-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+body>canvas:not(#bg-canvas){position:relative;z-index:1}
 </style>
 </head><body>
-<canvas id="bg-canvas"></canvas>
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
 <script type="importmap">
 {"imports":{"three":"/js/three.module.js","three/addons/loaders/GLTFLoader.js":"/js/GLTFLoader.js","three/addons/controls/OrbitControls.js":"/js/OrbitControls.js"}}
 </script>
 <script src="js/emotion-driver.js"></script>
+<script src="js/high-five.js"></script>
+<script src="js/companion-background.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from '/js/OrbitControls.js';
@@ -29,6 +32,10 @@ let _idleCount = 0;
 let _isGreetingDone = false;
 let _isInConversation = false;
 let _emotion = 'neutral';
+let highFive = null;
+let _pendingBodyAnimationLoads = 0;
+let _bodyRequest = 0;
+let _studyQuiet = false;
 const _clipCache = {};
 // 平滑交叉淡入（smoothstep 缓动）相关
 const CROSSFADE = 0.6;        // 切换过渡时长（秒），复用最丝滑的 crossFadeFrom（略长更柔）
@@ -82,11 +89,12 @@ const ARM_HUMAN_BONES = ['leftShoulder','rightShoulder','leftUpperArm','rightUpp
 
 async function loadClip(animName) {
   if (_clipCache[animName]) return _clipCache[animName];
+  const targetVrm = currentVrm;
   const baseUrl = window._vrmBaseUrl || '';
   const url = baseUrl + '/animations/' + animName;
   const vrmAnim = await loadAnimation(url);
-  if (!vrmAnim) return null;
-  const clip = createVRMAnimationClip(vrmAnim, currentVrm);
+  if (!vrmAnim || currentVrm !== targetVrm) return null;
+  const clip = createVRMAnimationClip(vrmAnim, targetVrm);
 
   if (animName !== ANIMATIONS.idle) {
     const idleClip = await loadClip(ANIMATIONS.idle);
@@ -108,6 +116,7 @@ async function loadClip(animName) {
     }
   }
 
+  if (currentVrm !== targetVrm) return null;
   _clipCache[animName] = clip;
   return clip;
 }
@@ -141,8 +150,16 @@ function _updateFades(dt) {
 
 async function playAnimation(animName, loop = false, onComplete = null, clamp = true) {
   if (!currentVrm) return false;
+  const request = ++_bodyRequest;
 
-  const clip = await loadClip(animName);
+  // Reserve the avatar while a clip loads, before its name becomes current.
+  // Otherwise a high five can start underneath an arriving idle variant.
+  let clip;
+  _pendingBodyAnimationLoads++;
+  try { clip = await loadClip(animName); }
+  finally { _pendingBodyAnimationLoads--; }
+  // A newer action owns the avatar; this is cancellation, not a load failure.
+  if (request !== _bodyRequest) return null;
   if (!clip) {
     console.error('[VRMA] Failed to load animation:', animName);
     return false;
@@ -180,8 +197,10 @@ async function playAnimation(animName, loop = false, onComplete = null, clamp = 
   console.log('[VRMA] Started playing:', animName);
 
   if (!loop && onComplete) {
-    const onFinished = () => {
+    const onFinished = event => {
+      if (event.action !== action) return;
       mixer.removeEventListener('finished', onFinished);
+      if (_currentAction !== action || request !== _bodyRequest) return;
       console.log('[VRMA] Animation finished:', animName);
       _isAnimationPlaying = false;
       _currentAnimName = null;
@@ -217,7 +236,7 @@ async function startGreeting() {
 function startIdleTimer() {
   if (_idleTimer) clearTimeout(_idleTimer);
   // 如果在对话中，不启动待机计时器
-  if (_isInConversation) return;
+  if (_isInConversation || _studyQuiet) return;
   _idleTimer = setTimeout(() => {
     if (!_isAnimationPlaying && _isGreetingDone && !_isInConversation) {
       playRandomIdle();
@@ -257,7 +276,9 @@ function clearIdleCycleTimer() {
 // 主待机播约两次后，安排插入一个随机变体待机
 function scheduleIdleVariant() {
   clearIdleCycleTimer();
+  if (_studyQuiet) return;
   getIdleDuration().then((dur) => {
+    if (_studyQuiet) return;
     // 主待机播两次 ≈ 2 倍时长；加随机抖动更自然
     const ms = dur * 2 * 1000 + 800 + Math.random() * 1500;
     _idleCycleTimer = setTimeout(insertIdleVariant, ms);
@@ -266,8 +287,9 @@ function scheduleIdleVariant() {
 
 // 插入一个随机变体待机（Yawn / happy idle / Head Shake idle），结束后回到主待机
 async function insertIdleVariant() {
+  if (_studyQuiet) return;
   // 仅在“纯主待机、无对话/无其他动作”时插入，避免打断情绪动作
-  if (_isInConversation || _currentAnimName !== ANIMATIONS.idle) {
+  if (highFive?.active || _isInConversation || _currentAnimName !== ANIMATIONS.idle) {
     scheduleIdleVariant();
     return;
   }
@@ -306,6 +328,7 @@ const ACTION_MAP = {
 // - 未命中（talk / 未知）-> 不打断，保持待机与口型（避免每句话都“演”一下，太浮夸）
 // 面部表情由 Emotion（setExpression）驱动，这里只负责身体动作
 async function triggerAction(actionName, emotion, replyId) {
+  highFive?.cancel(true);
   console.log('[VRMA] triggerAction called with:', actionName, 'emotion:', emotion);
   const key = (actionName || 'talk').toLowerCase();
   const map = ACTION_MAP[key];
@@ -336,7 +359,7 @@ async function triggerAction(actionName, emotion, replyId) {
     playIdleAnimation();   // 平滑交叉淡入回待机
   }, true);
   // VRMA 加载/播放失败时也要回到待机，避免模型卡在静止姿势
-  if (!ok) {
+  if (ok === false) {
     console.log('[VRMA] Body action failed, returning to idle');
     _isInConversation = false;
     playIdleAnimation();
@@ -350,6 +373,7 @@ async function triggerEmotionAnimation(emotion) {
 
 // 用户发送消息时调用，标记对话状态
 function onUserSendMessage() {
+  highFive?.cancel(true);
   setEmotion('neutral');
   console.log('[VRMA] User sent message, entering conversation');
   _isInConversation = true;
@@ -377,6 +401,48 @@ window.startGreeting = startGreeting;
 window.onUserSendMessage = onUserSendMessage;
 window.onConversationComplete = onConversationComplete;
 
+// Study focus keeps breathing/blinking and the normal idle, with no random
+// interruptions. Completion audio is local and independent of TTS latency.
+let _studySound = null;
+function prepareStudySound() {
+  try {
+    _studySound ??= new (window.AudioContext || window.webkitAudioContext)();
+    void _studySound.resume().catch(() => {});
+  } catch (_) {}
+}
+window.setStudyQuiet = quiet => {
+  quiet = !!quiet;
+  window.companionBackground?.setQuiet(quiet);
+  if (quiet) prepareStudySound();
+  if (_studyQuiet === quiet) return;
+  _studyQuiet = quiet;
+  highFive?.cancel(true);
+  stopIdleTimer();clearIdleCycleTimer();
+  _isInConversation = false;
+  if (quiet) {
+    setEmotion('neutral');
+    if (_isGreetingDone) void playIdleAnimation();
+  } else if (_isGreetingDone) scheduleIdleVariant();
+};
+window.celebrateStudyCompletion = replyId => {
+  window.setStudyQuiet(false);
+  prepareStudySound();
+  if (_studySound) {
+    for (const [delay,frequency] of [[0,659.25],[.22,880]]) {
+      const oscillator = _studySound.createOscillator(),gain = _studySound.createGain();
+      const start = _studySound.currentTime + delay;
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(0,start);
+      gain.gain.linearRampToValueAtTime(.12,start+.025);
+      gain.gain.exponentialRampToValueAtTime(.001,start+.48);
+      oscillator.connect(gain);gain.connect(_studySound.destination);
+      oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();};
+      oscillator.start(start);oscillator.stop(start+.5);
+    }
+  }
+  void triggerAction('happy','happy',replyId);
+};
+
 // Unified message sender: supports both webview_flutter (window.flutter) and webview_windows (window.chrome.webview)
 function sendToFlutter(message) {
   if (window.chrome && window.chrome.webview) {
@@ -390,11 +456,6 @@ function sendToFlutter(message) {
 
 let scene,camera,renderer,controls,currentVrm,clock=new THREE.Clock();
 window._isLipSyncPlaying = false;  // 全局变量，用于标记 lip-sync 是否在播放
-
-// Background system
-let _bgCanvas, _bgCtx, _bgParticles=[];
-let _currentBgType='stars';
-let _bgAnimFrame=0;
 
 // All bones that need to be tracked for smooth transitions
 // Excluding spine/chest/upperChest to keep character-specific defaults
@@ -474,11 +535,46 @@ renderer.domElement.addEventListener('wheel', function(event) {
 }, { capture: true, passive: false });
 // END WHEEL_ROUTING
 
+// BEGIN HIGH_FIVE_RELEASE
+function finishHighFiveGreeting(clip) {
+  if (!_animationMixer || !currentVrm) return;
+  // The overlay has restored its base before this call. Adopt the greeting's
+  // last frame as the outgoing mixer action, exactly like a finished greeting.
+  _fades.length = 0;
+  _animationMixer.stopAllAction();
+  const greeting = _animationMixer.clipAction(clip);
+  greeting.reset().setLoop(THREE.LoopOnce,1).setEffectiveWeight(1).play();
+  greeting.clampWhenFinished = true;
+  greeting.time = clip.duration;
+  greeting.paused = true;
+  _currentAction = greeting;
+  _currentAnimName = ANIMATIONS.greeting;
+  _animationMixer.update(0);
+  return playIdleAnimation();
+}
+// END HIGH_FIVE_RELEASE
+
+highFive = window.HighFive.createRig(THREE, {
+  canvas: renderer.domElement, camera, getVrm: () => currentVrm,
+  getGreetingClip: () => _clipCache[ANIMATIONS.greeting],
+  isReady: () => !!currentVrm && !_studyQuiet && _isGreetingDone && _pendingBodyAnimationLoads === 0 && !window._isLipSyncPlaying && _currentAnimName === ANIMATIONS.idle,
+  onState: state => sendToFlutter('interaction:' + state),
+  onHit: () => setEmotion('happy'),
+  onRelease: finishHighFiveGreeting,
+});
+window.startHighFive = () => highFive.start();
+window.cancelHighFive = () => highFive.cancel();
+window.highFiveStatus = () => highFive.snapshot();
+
 const loader=new GLTFLoader();
 loader.register(p=>new VRMLoaderPlugin(p));
 loader.register(p=>new VRMAnimationLoaderPlugin(p));
 
 async function loadModel(path) {
+  ++_bodyRequest;
+  _fades.length=0;
+  for (const key of Object.keys(_clipCache)) delete _clipCache[key];
+  highFive?.cancel(true);
   setEmotion('neutral');
   if(currentVrm){scene.remove(currentVrm.scene);currentVrm=null;}
   try{
@@ -537,6 +633,10 @@ async function loadModel(path) {
 
 // Alternative: load from ArrayBuffer
 async function loadModelFromBuffer(buffer) {
+  ++_bodyRequest;
+  _fades.length=0;
+  for (const key of Object.keys(_clipCache)) delete _clipCache[key];
+  highFive?.cancel(true);
   setEmotion('neutral');
   if(currentVrm){scene.remove(currentVrm.scene);currentVrm=null;}
   try{
@@ -722,9 +822,10 @@ function animate(){
   const t=Date.now()*0.001;
 
   // Update background animation
-  animateBackground();
+  window.companionBackground?.frame(performance.now());
 
   if(currentVrm){
+    highFive?.restore();
     // Look at camera: target follows camera position
     lookTarget.position.copy(camera.position);
     if(currentVrm.lookAt)currentVrm.lookAt.target=lookTarget;
@@ -740,6 +841,7 @@ function animate(){
     if (_animationMixer) {
       _animationMixer.update(dt);
     }
+    highFive?.update();
 
     // Facial mood follows animation tracks; blink and mouth keep separate ownership.
     emotionDriver.update(currentVrm.expressionManager, dt, window._isLipSyncPlaying);
@@ -777,360 +879,13 @@ window.setExpression=(name,value)=>{
 window.loadModel=loadModel;
 window.randomPose=randomPose;
 
-// Background system
-function initBackground() {
-  _bgCanvas = document.getElementById('bg-canvas');
-  _bgCtx = _bgCanvas.getContext('2d');
-  resizeBgCanvas();
-  window.addEventListener('resize', resizeBgCanvas);
-}
-
-function resizeBgCanvas() {
-  if (!_bgCanvas) return;
-  _bgCanvas.width = window.innerWidth;
-  _bgCanvas.height = window.innerHeight;
-}
-
-function setBackground(bgType) {
-  // Map full IDs to short types
-  const bgMap = {
-    'dreamy_starry': 'stars',
-    'sakura_falling': 'sakura',
-    'cozy_room': 'warm_glow',
-    'gradient_glow': 'glow',
-    'fresh_meadow': 'fireflies',
-    'sunset_dusk': 'sunrays',
-    'ice_world': 'snowflakes',
-    'mystic_night': 'nebula'
-  };
-
-  _currentBgType = bgMap[bgType] || bgType;
-  _bgParticles = [];
-  _bgAnimFrame = 0;
-
-  // Initialize particles based on type
-  const w = _bgCanvas.width;
-  const h = _bgCanvas.height;
-
-  switch(_currentBgType) {
-    case 'stars':
-      for (let i = 0; i < 100; i++) {
-        _bgParticles.push({
-          x: Math.random() * w,
-          y: Math.random() * h,
-          size: Math.random() * 2 + 0.5,
-          opacity: Math.random(),
-          speed: Math.random() * 0.02 + 0.005
-        });
-      }
-      break;
-    case 'sakura':
-      for (let i = 0; i < 30; i++) {
-        _bgParticles.push({
-          x: Math.random() * w,
-          y: Math.random() * h - h,
-          size: Math.random() * 8 + 4,
-          rotation: Math.random() * Math.PI * 2,
-          speedX: Math.random() * 1 - 0.5,
-          speedY: Math.random() * 1 + 0.5,
-          rotSpeed: Math.random() * 0.02 - 0.01
-        });
-      }
-      break;
-    case 'fireflies':
-      for (let i = 0; i < 20; i++) {
-        _bgParticles.push({
-          x: Math.random() * w,
-          y: Math.random() * h,
-          size: Math.random() * 4 + 2,
-          opacity: Math.random(),
-          speedX: Math.random() * 0.5 - 0.25,
-          speedY: Math.random() * 0.5 - 0.25,
-          phase: Math.random() * Math.PI * 2
-        });
-      }
-      break;
-    case 'snowflakes':
-      for (let i = 0; i < 50; i++) {
-        _bgParticles.push({
-          x: Math.random() * w,
-          y: Math.random() * h - h,
-          size: Math.random() * 3 + 1,
-          speedX: Math.random() * 0.5 - 0.25,
-          speedY: Math.random() * 0.5 + 0.3,
-          wobble: Math.random() * Math.PI * 2
-        });
-      }
-      break;
-    case 'glow':
-    case 'warm_glow':
-    case 'sunrays':
-    case 'nebula':
-      // Static effects, no particles needed
-      break;
-  }
-}
-
-function animateBackground() {
-  _bgAnimFrame++;
-  if (!_bgCtx || !_bgCanvas) return;
-
-  const w = _bgCanvas.width;
-  const h = _bgCanvas.height;
-  const ctx = _bgCtx;
-
-  // Clear
-  ctx.clearRect(0, 0, w, h);
-
-  // Draw gradient background based on type
-  switch(_currentBgType) {
-    case 'stars':
-      drawStarryBackground(ctx, w, h);
-      break;
-    case 'sakura':
-      drawSakuraBackground(ctx, w, h);
-      break;
-    case 'cozy_room':
-    case 'warm_glow':
-      drawWarmBackground(ctx, w, h);
-      break;
-    case 'gradient_glow':
-    case 'glow':
-      drawGradientGlow(ctx, w, h);
-      break;
-    case 'fresh_meadow':
-    case 'fireflies':
-      drawMeadowBackground(ctx, w, h);
-      break;
-    case 'sunset_dusk':
-    case 'sunrays':
-      drawSunsetBackground(ctx, w, h);
-      break;
-    case 'ice_world':
-    case 'snowflakes':
-      drawIceBackground(ctx, w, h);
-      break;
-    case 'mystic_night':
-    case 'nebula':
-      drawMysticBackground(ctx, w, h);
-      break;
-  }
-}
-
-function drawStarryBackground(ctx, w, h) {
-  // Dark gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#0F0C29');
-  grad.addColorStop(0.5, '#302B63');
-  grad.addColorStop(1, '#24243E');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Stars
-  _bgParticles.forEach(p => {
-    p.opacity += p.speed;
-    if (p.opacity > 1) p.opacity = 0;
-    const alpha = Math.sin(p.opacity * Math.PI);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-    ctx.fill();
-  });
-}
-
-function drawSakuraBackground(ctx, w, h) {
-  // Pink gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#FFF0F5');
-  grad.addColorStop(0.5, '#FFE4E1');
-  grad.addColorStop(1, '#FFC0CB');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Sakura petals
-  _bgParticles.forEach(p => {
-    p.x += p.speedX;
-    p.y += p.speedY;
-    p.rotation += p.rotSpeed;
-
-    if (p.y > h + 20) {
-      p.y = -20;
-      p.x = Math.random() * w;
-    }
-    if (p.x < -20) p.x = w + 20;
-    if (p.x > w + 20) p.x = -20;
-
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.rotation);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, p.size, p.size * 0.6, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 182, 193, 0.7)';
-    ctx.fill();
-    ctx.restore();
-  });
-}
-
-function drawWarmBackground(ctx, w, h) {
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#FFF8DC');
-  grad.addColorStop(0.5, '#FFEFD5');
-  grad.addColorStop(1, '#FFE4C4');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Warm glow effect
-  const time = _bgAnimFrame * 0.01;
-  const glowX = w * 0.5 + Math.sin(time) * w * 0.1;
-  const glowY = h * 0.3 + Math.cos(time * 0.7) * h * 0.05;
-  const glowGrad = ctx.createRadialGradient(glowX, glowY, 0, glowX, glowY, w * 0.4);
-  glowGrad.addColorStop(0, 'rgba(255, 200, 100, 0.15)');
-  glowGrad.addColorStop(1, 'rgba(255, 200, 100, 0)');
-  ctx.fillStyle = glowGrad;
-  ctx.fillRect(0, 0, w, h);
-}
-
-function drawGradientGlow(ctx, w, h) {
-  const grad = ctx.createLinearGradient(0, 0, w, h);
-  grad.addColorStop(0, '#667eea');
-  grad.addColorStop(0.5, '#764ba2');
-  grad.addColorStop(1, '#f093fb');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Animated glow orbs
-  const time = _bgAnimFrame * 0.005;
-  for (let i = 0; i < 3; i++) {
-    const x = w * (0.3 + i * 0.2) + Math.sin(time + i * 2) * w * 0.1;
-    const y = h * (0.3 + i * 0.15) + Math.cos(time * 0.7 + i * 1.5) * h * 0.08;
-    const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, w * 0.25);
-    glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.1)');
-    glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = glowGrad;
-    ctx.fillRect(0, 0, w, h);
-  }
-}
-
-function drawMeadowBackground(ctx, w, h) {
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#E8F5E9');
-  grad.addColorStop(0.5, '#C8E6C9');
-  grad.addColorStop(1, '#A5D6A7');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Fireflies
-  const time = _bgAnimFrame * 0.02;
-  _bgParticles.forEach(p => {
-    p.x += p.speedX;
-    p.y += p.speedY;
-    p.phase += 0.03;
-
-    if (p.x < 0) p.x = w;
-    if (p.x > w) p.x = 0;
-    if (p.y < 0) p.y = h;
-    if (p.y > h) p.y = 0;
-
-    const alpha = (Math.sin(p.phase) + 1) * 0.3;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 150, ${alpha})`;
-    ctx.fill();
-
-    // Glow effect
-    const glowGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 3);
-    glowGrad.addColorStop(0, `rgba(255, 255, 150, ${alpha * 0.5})`);
-    glowGrad.addColorStop(1, 'rgba(255, 255, 150, 0)');
-    ctx.fillStyle = glowGrad;
-    ctx.fillRect(p.x - p.size * 3, p.y - p.size * 3, p.size * 6, p.size * 6);
-  });
-}
-
-function drawSunsetBackground(ctx, w, h) {
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#FF6B6B');
-  grad.addColorStop(0.5, '#FF8E53');
-  grad.addColorStop(1, '#FFD93D');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Sun rays
-  const time = _bgAnimFrame * 0.005;
-  const centerX = w * 0.5;
-  const centerY = h * 0.8;
-
-  for (let i = 0; i < 12; i++) {
-    const angle = (i / 12) * Math.PI * 2 + time;
-    const length = w * 0.6;
-    const width = 3;
-
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(length, -width);
-    ctx.lineTo(length, width);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(255, 255, 200, 0.1)';
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-function drawIceBackground(ctx, w, h) {
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#E0F7FA');
-  grad.addColorStop(0.5, '#B2EBF2');
-  grad.addColorStop(1, '#80DEEA');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Snowflakes
-  _bgParticles.forEach(p => {
-    p.x += p.speedX + Math.sin(p.wobble) * 0.3;
-    p.y += p.speedY;
-    p.wobble += 0.02;
-
-    if (p.y > h + 10) {
-      p.y = -10;
-      p.x = Math.random() * w;
-    }
-
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-    ctx.fill();
-  });
-}
-
-function drawMysticBackground(ctx, w, h) {
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, '#1A1A2E');
-  grad.addColorStop(0.5, '#16213E');
-  grad.addColorStop(1, '#0F3460');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  // Nebula effect
-  const time = _bgAnimFrame * 0.003;
-  for (let i = 0; i < 3; i++) {
-    const x = w * (0.2 + i * 0.3) + Math.sin(time + i * 1.5) * w * 0.1;
-    const y = h * (0.3 + i * 0.2) + Math.cos(time * 0.8 + i * 2) * h * 0.1;
-    const radius = w * 0.2;
-
-    const nebulaGrad = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    nebulaGrad.addColorStop(0, `rgba(${100 + i * 50}, 50, ${150 + i * 30}, 0.15)`);
-    nebulaGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = nebulaGrad;
-    ctx.fillRect(0, 0, w, h);
-  }
-}
-
-window.setBackground = setBackground;
-
-// Initialize background system
-initBackground();
+// Background atmosphere runs on the existing avatar loop, capped independently
+// to 30 fps. Public entry points remain compatible with Flutter settings.
+const backgroundQuery = new URLSearchParams(location.search);
+window.companionBackground = window.CompanionBackground.create(document.getElementById('bg-canvas'), {
+  theme: backgroundQuery.get('background'), motionMode: backgroundQuery.get('motion')
+});
+window.setBackground = id => window.companionBackground.setTheme(id);
 
 // Error logging
 window.onerror=(msg,src,line,col,err)=>{

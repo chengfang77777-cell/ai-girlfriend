@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -27,6 +28,26 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  focus_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "ai_girlfriend/window_focus",
+      &flutter::StandardMethodCodec::GetInstance());
+  focus_channel_->SetMethodCallHandler(
+      [this](const auto& call, auto result) {
+        if (call.method_name() != "restoreInputFocus") {
+          result->NotImplemented();
+          return;
+        }
+        // WebView2 mouse input can focus its child HWND. Return keyboard input
+        // to Flutter, but never activate our app over another foreground app.
+        const HWND foreground = GetForegroundWindow();
+        const bool is_foreground = foreground &&
+            GetAncestor(foreground, GA_ROOT) == GetHandle();
+        if (is_foreground && flutter_controller_) {
+          SetFocus(flutter_controller_->view()->GetNativeWindow());
+        }
+        result->Success(flutter::EncodableValue(is_foreground));
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +61,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  focus_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

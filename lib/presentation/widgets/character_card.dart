@@ -1,24 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../core/theme.dart';
 
-/// Personality tag model for character cards
 class PersonalityTag {
   final String label;
   final Color color;
 
-  const PersonalityTag({
-    required this.label,
-    this.color = const Color(0xFFFF69B4),
-  });
+  const PersonalityTag(
+      {required this.label, this.color = AppTheme.primaryColor});
 }
 
-/// Character card widget displaying character info.
-///
-/// Rounded Card with avatar area, name, age, and personality tag chips.
-/// Pink border when selected. onTap and onEdit/onDelete callbacks.
-/// PopupMenuButton for edit/delete actions (hidden for preset characters
-/// by omitting the callbacks).
-class CharacterCard extends StatefulWidget {
+/// A responsive character tile. Its parent owns its width and selection.
+class CharacterCard extends StatelessWidget {
   final String name;
   final int age;
   final List<PersonalityTag> personalityTags;
@@ -27,8 +20,6 @@ class CharacterCard extends StatefulWidget {
   final VoidCallback? onTap;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
-
-  /// 清除该角色聊天记录（预设角色与自定义角色都可提供）
   final VoidCallback? onClearChat;
 
   const CharacterCard({
@@ -44,317 +35,148 @@ class CharacterCard extends StatefulWidget {
     this.onClearChat,
   });
 
-  /// Whether this card is for a preset character (no edit/delete)
   bool get isPreset => onEdit == null && onDelete == null;
+  bool get _hasMenu =>
+      onEdit != null || onDelete != null || onClearChat != null;
 
-  /// Whether the card should show an action menu (edit / clear chat / delete)
-  bool get _hasMenu => onEdit != null || onDelete != null || onClearChat != null;
-
-  @override
-  State<CharacterCard> createState() => _CharacterCardState();
-}
-
-class _CharacterCardState extends State<CharacterCard> {
-  bool _isPressed = false;
-
-  void _handleTapDown(TapDownDetails details) {
-    setState(() => _isPressed = true);
-  }
-
-  void _handleTapUp(TapUpDetails details) {
-    setState(() => _isPressed = false);
-    HapticFeedback.lightImpact();
-    widget.onTap?.call();
-  }
-
-  void _handleTapCancel() {
-    setState(() => _isPressed = false);
-  }
-
-  void _showClearChatConfirmation() {
-    showDialog(
+  Future<void> _confirmClear(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
         title: const Text('清除聊天记录'),
-        content: Text(
-            '确定要清除与"${widget.name}"的全部聊天记录吗？\n此操作不可恢复。'),
+        content: Text('确定要清除与「$name」的全部聊天记录吗？\n此操作不可恢复。'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('取消'),
-          ),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
           TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              widget.onClearChat?.call();
-            },
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.orange,
-            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.angry),
             child: const Text('清除'),
           ),
         ],
       ),
     );
-  }
-
-  void _showDeleteConfirmation() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Text('确认删除'),
-        content: Text('确定要删除角色"${widget.name}"吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              widget.onDelete?.call();
-            },
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.red,
-            ),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
+    if (confirmed == true) onClearChat?.call();
   }
 
   @override
   Widget build(BuildContext context) {
-    final scale = _isPressed ? 0.96 : 1.0;
-
-    return AnimatedScale(
-      scale: scale,
-      duration: const Duration(milliseconds: 150),
-      child: GestureDetector(
-        onTapDown: _handleTapDown,
-        onTapUp: _handleTapUp,
-        onTapCancel: _handleTapCancel,
-        child: Container(
-          width: 170,
-          margin: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: widget.isSelected
-                  ? const Color(0xFFFF69B4)
-                  : Colors.grey[200]!,
-              width: widget.isSelected ? 2.5 : 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: widget.isSelected
-                    ? const Color(0xFFFF69B4).withOpacity(0.2)
-                    : Colors.black.withOpacity(0.06),
-                blurRadius: widget.isSelected ? 12 : 8,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Action menu (shown when the card provides any action)
-              if (widget._hasMenu)
-                _buildActionMenu()
-              else
-                const SizedBox(height: 4),
-
-              // Avatar area
-              _buildAvatarSection(),
-
-              // Info section
-              _buildInfoSection(),
-
-              // Personality tags
-              _buildPersonalityTags(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActionMenu() {
-    return Align(
-      alignment: Alignment.topRight,
-      child: PopupMenuButton<String>(
-        offset: const Offset(0, 40),
+    return Semantics(
+      selected: isSelected,
+      child: Material(
+        color: isSelected ? AppTheme.primarySoft : AppTheme.bgCardLight,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+              color: isSelected ? AppTheme.primaryColor : AppTheme.border),
         ),
-        onSelected: (value) {
-          if (value == 'edit') {
-            widget.onEdit?.call();
-          } else if (value == 'clear') {
-            _showClearChatConfirmation();
-          } else if (value == 'delete') {
-            _showDeleteConfirmation();
-          }
-        },
-        itemBuilder: (context) => [
-          if (widget.onEdit != null)
-            PopupMenuItem<String>(
-              value: 'edit',
-              child: Row(
-                children: [
-                  Icon(Icons.edit_outlined, size: 18, color: Colors.grey[600]),
-                  const SizedBox(width: 8),
-                  const Text('编辑'),
-                ],
-              ),
-            ),
-          if (widget.onClearChat != null)
-            PopupMenuItem<String>(
-              value: 'clear',
-              child: Row(
-                children: [
-                  Icon(Icons.chat_bubble_outline,
-                      size: 18, color: Colors.orange[400]),
-                  const SizedBox(width: 8),
-                  const Text('清除聊天记录'),
-                ],
-              ),
-            ),
-          if (widget.onDelete != null)
-            PopupMenuItem<String>(
-              value: 'delete',
-              child: Row(
-                children: [
-                  Icon(Icons.delete_outline,
-                      size: 18, color: Colors.red[400]),
-                  const SizedBox(width: 8),
-                  const Text('删除', style: TextStyle(color: Colors.red)),
-                ],
-              ),
-            ),
-        ],
-        child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: Icon(
-            Icons.more_vert,
-            size: 20,
-            color: Colors.grey[400],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAvatarSection() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(40),
-        child: Container(
-          width: 72,
-          height: 72,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFFF69B4),
-                Color(0xFFFF1493),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap == null
+              ? null
+              : () {
+                  HapticFeedback.lightImpact();
+                  onTap!();
+                },
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryLight,
+                        borderRadius: BorderRadius.circular(17),
+                      ),
+                      child: Text(
+                        name.isNotEmpty ? name.characters.first : '?',
+                        style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.primaryDark),
+                      ),
+                    ),
+                    const Spacer(),
+                    if (isSelected)
+                      const Tooltip(
+                          message: '当前陪伴角色',
+                          child: Icon(Icons.check_circle, size: 22)),
+                    if (_hasMenu) _buildActionMenu(context),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Text(name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text('$age 岁 · ${isPreset ? '预设角色' : '自定义角色'}',
+                    style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: personalityTags
+                      .map((tag) => Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: tag.color.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Text(tag.label,
+                                style:
+                                    TextStyle(fontSize: 12, color: tag.color)),
+                          ))
+                      .toList(),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Text(isSelected ? '正在陪伴你' : '选择她，开始聊天',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppTheme.primaryColor)),
+                    const Spacer(),
+                    const Icon(Icons.arrow_forward_rounded, size: 16),
+                  ],
+                ),
               ],
             ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFFF69B4).withOpacity(0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Center(
-            child: Text(
-              widget.name.isNotEmpty ? widget.name.substring(0, 1) : '?',
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildInfoSection() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Column(
-        children: [
-          Text(
-            widget.name,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-            textAlign: TextAlign.center,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 2),
-          Text(
-            '${widget.age}岁',
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.grey[500],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPersonalityTags() {
-    if (widget.personalityTags.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      child: Wrap(
-        spacing: 4,
-        runSpacing: 4,
-        alignment: WrapAlignment.center,
-        children: widget.personalityTags.map((tag) {
-          return Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: tag.color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: tag.color.withOpacity(0.3),
-                width: 0.5,
-              ),
-            ),
-            child: Text(
-              tag.label,
-              style: TextStyle(
-                fontSize: 11,
-                color: tag.color,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          );
-        }).toList(),
-      ),
+  Widget _buildActionMenu(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: '角色选项',
+      icon: const Icon(Icons.more_horiz, color: AppTheme.textSecondary),
+      onSelected: (value) {
+        if (value == 'edit') onEdit?.call();
+        if (value == 'clear') _confirmClear(context);
+        // The character list owns deletion and its confirmation dialog.
+        if (value == 'delete') onDelete?.call();
+      },
+      itemBuilder: (_) => [
+        if (onEdit != null)
+          const PopupMenuItem(value: 'edit', child: Text('编辑角色')),
+        if (onClearChat != null)
+          const PopupMenuItem(value: 'clear', child: Text('清除聊天记录')),
+        if (onDelete != null)
+          const PopupMenuItem(
+              value: 'delete',
+              child: Text('删除角色', style: TextStyle(color: AppTheme.angry))),
+      ],
     );
   }
 }

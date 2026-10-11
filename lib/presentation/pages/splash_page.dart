@@ -31,10 +31,10 @@ class _SplashPageState extends State<SplashPage>
       ),
     );
 
-    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+    _scaleAnimation = Tween<double>(begin: 0.96, end: 1.0).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: Curves.elasticOut,
+        curve: Curves.easeOutCubic,
       ),
     );
 
@@ -64,8 +64,8 @@ class _SplashPageState extends State<SplashPage>
             end: Alignment.bottomCenter,
             colors: [
               AppTheme.primaryLight,
-              Color(0xFFFFB6C1),
-              Color(0xFFFFDAB9),
+              AppTheme.bgLight,
+              AppTheme.bgLight,
             ],
           ),
         ),
@@ -85,28 +85,37 @@ class _SplashPageState extends State<SplashPage>
               mainAxisSize: MainAxisSize.min,
               children: [
                 TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 1.0, end: 1.18),
+                  tween: Tween(begin: 1.0, end: 1.04),
                   duration: const Duration(milliseconds: 150),
                   curve: Curves.easeInOut,
-                  builder: (context, value, child) => Transform.scale(scale: value, child: child),
-                  child: const Icon(Icons.favorite, size: 80, color: Colors.white),
+                  builder: (context, value, child) =>
+                      Transform.scale(scale: value, child: child),
+                  child: Container(
+                      width: 88,
+                      height: 88,
+                      decoration: BoxDecoration(
+                          color: AppTheme.bgCardLight,
+                          borderRadius: BorderRadius.circular(28),
+                          border: Border.all(color: AppTheme.border)),
+                      child: const Icon(Icons.favorite_outline,
+                          size: 36, color: AppTheme.accentRose)),
                 ),
                 const SizedBox(height: 24),
                 const Text(
                   'AI 女友',
                   style: TextStyle(
-                    fontSize: 36,
+                    fontSize: 28,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    letterSpacing: 4,
+                    color: AppTheme.textPrimary,
+                    letterSpacing: 2,
                   ),
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  '温柔可爱的虚拟伴侣',
+                  '把日常，慢慢说给她听',
                   style: TextStyle(
                     fontSize: 16,
-                    color: Colors.white.withOpacity(0.8),
+                    color: AppTheme.textSecondary,
                   ),
                 ),
               ],

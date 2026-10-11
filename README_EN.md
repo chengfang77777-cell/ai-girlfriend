@@ -15,10 +15,13 @@
 
 An AI girlfriend app built with Flutter that deeply integrates **large language model conversation**, **speech synthesis**, and **3D VRM avatars**:
 
-- Chat naturally with AI characters (powered by DeepSeek `deepseek-chat`)
-- The AI **matches facial expressions and body actions in real time** based on the conversation, with **lip-sync** while speaking
-- Voice playback with customizable voices (powered by Xiaomi MiMo TTS)
-- Available on Windows desktop, Android phones, and Web
+- Dual LLM support: freely switch between **DeepSeek** (`deepseek-chat`) and **Xiaomi MiMo** (`mimo-v2.5` / `mimo-v2.5-pro`)
+- Real-time facial expression and body motion matching with **lip-sync** driven by audio spectrum
+- Voice playback and customizable voices powered by Xiaomi MiMo TTS
+- **Study Companion Mode**: Pomodoro timer, quiet focus state, celebration actions, and soothing background white noise
+- **Physical Interactions**: High-Five gestures with real-time response, hand-raising, and emotion feedback
+- **Dynamic Backgrounds**: 8 immersive atmospheric particle themes with adjustable motion intensity
+- Fully aligned across **Windows Desktop** and **Android Mobile** with ready-to-use release packages
 
 ---
 
@@ -26,17 +29,22 @@ An AI girlfriend app built with Flutter that deeply integrates **large language 
 
 | Feature | Description |
 | --- | --- |
-| 💬 **AI Chat** | Powered by DeepSeek `deepseek-chat`, returns structured JSON (reply text + emotion + action), with sliding-window context, exponential-backoff retries, and timeout control |
-| 😊 **Emotion System** | 6 emotions: happy / shy / angry / sad / surprised / neutral. The AI automatically detects and maps them to VRM blendshape expressions |
-| 🏃 **Action Matching** | 10 built-in VRMA animations; the AI infers actions from dialogue semantics (clapping, thanking, head-shaking, greeting, yawning, getting angry, etc.), with smooth cross-fades and automatic fallback to idle |
-| 👄 **Lip-Sync** | Real-time mouth driving based on AudioWorklet — the avatar's lips move in sync with the speech |
-| 🔊 **Text-to-Speech (TTS)** | Xiaomi MiMo `mimo-v2.5-tts` with preset voices 「冰糖」「茉莉」and an auto-read toggle |
-| 🎨 **Custom Voice** | Design your own voice by text description via `mimo-v2.5-tts-voicedesign` |
+| 💬 **Dual AI Chat Engines** | Seamlessly switch between **DeepSeek** (`deepseek-chat`) and **Xiaomi MiMo** (`mimo-v2.5` / `mimo-v2.5-pro`) with structured JSON parsing, sliding-window context, and automatic retries |
+| 📖 **Study Companion** | Pomodoro focus sessions with quiet study mode (minimal distractions with subtle breathing and natural micro-expressions) and completion celebrations |
+| 🎵 **Study White Noise & Music** | Built-in ambient music & white noise control panel with independent volume control |
+| ✋ **High-Five Interaction** | Interactive hand clapping with real-time raising, waiting, hit detection, and automatic return to idle (fully aligned on Windows & Android) |
+| 🌌 **Dynamic Atmospheric Backgrounds** | 8 dynamic particle themes (Dreamy Starry, Sakura Petals, Cozy Room, Ambient Glow, Fresh Meadow, Sunset Dusk, Ice World, Mystic Night) with 3 motion intensity levels |
+| 😊 **Emotion System** | 8 emotions (happy, shy, angry, sad, surprised, neutral, refuse, thankful) mapped smoothly to VRM blendshapes |
+| 🏃 **Smooth Action Transitions** | 10 VRMA animations connected via smoothstep cross-fading and hold-style blending |
+| 👄 **Audio Spectrum Lip-Sync** | Web Audio API / AudioWorklet spectrum analysis driving VRM visemes |
+| 🔊 **Speech Synthesis (TTS)** | Xiaomi MiMo `mimo-v2.5-tts` with preset and customizable voices |
+| 🎨 **Custom Voice Design** | Design voices via natural language prompts using `mimo-v2.5-tts-voicedesign` |
 | 👧 **Preset Characters** | 7 distinct characters: Gentle Senpai, Cheerful Childhood Friend, Tsundere Deskmate, Elegant Onee-san, Healing Neighbor, Ram, Rem |
-| 🧑‍🎨 **Custom Characters** | Freely create characters: set name, age, personality tags, speaking style (optional), and bind your own VRM model and voice |
-| 🗨️ **WeChat Style Mimicry** | Paste a real WeChat chat log (with the other person's WeChat name and yours) when creating a character — the character will **always mimic the "other person's" tone** in conversation: catchphrases, wording habits, sentence length, emojis and punctuation, just like chatting with the real person |
-| 💾 **Local Storage** | Based on Hive, persists characters, chat history (up to 5,000 messages per character) and settings — all data stays local |
-| 🖼️ **Chat Backgrounds** | Multiple gradient backgrounds, each character has a default background |
+| 🧑‍🎨 **Custom Characters** | Freely create characters with custom VRM models, voices, and personalities |
+| 🗨️ **WeChat Tone Mimicry** | Upload real chat logs to make AI mimic the specific person's conversational habits and punctuation |
+| 🧹 **Chat History Management** | Instant clear-chat buttons per character or globally from Settings with double confirmation |
+| 🔑 **Secure UI Key Management** | 100% UI-based API key input saved in local Hive storage, zero secret leakage in code |
+| 💾 **Local Storage** | Complete local data persistence via Hive, keeping personal conversations private |
 
 ---
 
@@ -171,15 +179,22 @@ flutter run -d chrome
 #### 5. Build release packages
 
 ```bash
-flutter build windows            # Windows desktop build → build/windows/
-flutter build apk --release      # Android APK → build/app/outputs/flutter-apk/app-release.apk
+# Windows Desktop Release
+flutter build windows --release
+# Generates portable Windows application: build/windows/x64/runner/Release/ai_girlfriend.exe
+
+# Android Mobile Release (Split-per-ABI recommended)
+flutter build apk --release --split-per-abi
+# Generates 3 ABI packages:
+# 1. build/app/outputs/flutter-apk/app-arm64-v8a-release.apk  (~131MB, for modern Android phones)
+# 2. build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk (~128MB, for legacy 32-bit devices)
+# 3. build/app/outputs/flutter-apk/app-x86_64-release.apk      (~132MB, for emulators/tablets)
 ```
 
-> On first build, cache directories such as `build/`, `.dart_tool/`, and `windows/flutter/ephemeral/` are automatically regenerated — no manual setup needed.
-
-> 📱 **Ready-to-install APK**: After running `flutter build apk --release`, the artifact `build/app/outputs/flutter-apk/app-release.apk` is **an installable package that can be used directly on your phone** — just transfer this APK to your Android phone (via WeChat, cloud drive, USB, etc.) and tap to install. No Flutter environment needed.
+> 📱 **Ready-to-install APK**: For regular mobile use, simply copy `app-arm64-v8a-release.apk` to your Android device (via USB, cloud drive, or messaging tools) and tap to install. No developer setup required.
 >
-> Pre-built release APKs are available on [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases).
+> 📦 **Binary Release Distribution**:
+> Compiled binaries (`.apk` and `.exe`) are excluded by `.gitignore` and **are not committed into the Git repository** to prevent repository bloat and respect Git remote file limits. Pre-built packages are distributed through [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases).
 
 ---
 

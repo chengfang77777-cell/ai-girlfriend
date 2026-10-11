@@ -138,3 +138,53 @@
 - 历史提交中仍残留两处**已吊销**的 API Key 明文（`storage_service.dart`、`tts_service_web.dart` 的旧版本）。密钥已在控制台吊销，风险已解除；如需从历史中一并抹除，可再跑一次 `git-filter-repo --replace-text` 并重新 force push（需再重写一次历史）。
 - 当前 release 使用 debug 签名，上架应用商店前需配置正式签名。
 - 本机 log.md 的本次记录尚未提交，下次提交时一并推送。
+
+## 2026-10-11 10:28:00
+
+### 11. Git 规范与忽略策略升级（.gitattributes & .gitignore）
+
+- **背景与根因**：
+  - Windows 环境下修改代码频发 `LF will be replaced by CRLF` 告警，跨平台换行符未统一。
+  - 项目包含数十个 VRM 模型与 VRMA 动作等大文件资产，缺乏显式 `binary` 声明，存在意外换行符损坏或文本 diff 性能损耗风险。
+  - 本地生成了 `.codebuddy/` 等 AI 工具目录，且新增本地包 `packages/webview_windows` 后的子模块构建目录（`build/`、`.dart_tool/`）未被递归忽略。
+- **改动成果**：
+  - 更新 [.gitattributes](file:///d:/AIcursorclaude/ai_girlfriend_vrm/.gitattributes)：全局启用 `* text=auto`；跨平台源码与文本文件（Dart、JS、C++、CMake、Python、HTML 等）统一 `eol=lf`；Windows 批处理保持 `eol=crlf`；VRM、VRMA、GLB、PNG、WAV、TTF、APK、DLL 等资产显式声明为 `binary`。
+  - 更新 [.gitignore](file:///d:/AIcursorclaude/ai_girlfriend_vrm/.gitignore)：保留既有全部规则；补全 AI/现代编辑器目录（`.codebuddy/`、`.cursor/`、`.windsurf/`）；补全 Visual Studio 深度忽略（`.vs/`、`*.vcxproj.user`）；改用递归规则（`build/`、`**/build/`、`**/.dart_tool/`）覆盖子包；补全 Python 缓存（`__pycache__/` 等）、Node 依赖（`node_modules/`）及 Android 签名凭据兜底（`key.properties`、`*.keystore`、`*.jks`、`*.aab`、`local.properties`）。
+- **自检与验证**：
+  - `git check-ignore -v` 实测：`.codebuddy/`、`.vs/`、`packages/webview_windows/.dart_tool/` 均精准命中。
+  - `git check-attr -a` 实测：VRM/VRMA 文件正确识别为 `binary: set`，Dart/C++ 正确生效 `eol: lf`。
+
+### 12. 移动端体验对齐与 Android Release 构建（2026-10-11 10:37:00）
+
+- **背景与改动**：
+  - 为了让手机端与 Windows 版功能表现完全一致，在 [lib/presentation/widgets/avatar_display.dart](file:///d:/AIcursorclaude/ai_girlfriend_vrm/lib/presentation/widgets/avatar_display.dart) 中补齐移动端支持：
+    - `startHighFive()` 补齐移动端 `_mobileCtrl` 处理，支持通过 `runJavaScriptReturningResult` 触发击掌互动。
+    - 移动端 WebView 初始化 `loadRequest` URL 增加 `background` 与 `motion` 查询参数，确保首帧即呈现指定背景与动态。
+- **构建结果**：
+  - 使用 Flutter SDK `D:\AIcursorclaude\flutter3245` 执行 `flutter build apk --release --split-per-abi` 构建成功：
+    - [app-arm64-v8a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)：131.0 MB（主流 Android 手机使用）
+    - [app-armeabi-v7a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk)：128.6 MB（32 位老款机型）
+    - [app-x86_64-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-x86_64-release.apk)：132.1 MB（模拟器/部分平板）
+- **自检验证**：
+  - `flutter test test/high_five_control_test.dart`：8 项测试全部通过。
+  - `assembleRelease` 编译耗时 92.6s，产物完整落盘。
+
+### 13. 中英双语文档同步与二进制产物入库安全审计（2026-10-11 10:40:00）
+
+- **成果**：
+  - 更新 [README.md](file:///d:/AIcursorclaude/ai_girlfriend_vrm/README.md) 与 [README_EN.md](file:///d:/AIcursorclaude/ai_girlfriend_vrm/README_EN.md)：
+    - 功能特性全面覆盖：DeepSeek + 小米 MiMo 双大模型切换、专注伴读模式与静音机制、伴读音乐/白噪音、击掌互动（High-Five）、8 组动态粒子伴读背景、单角色/全局聊天记录清空。
+    - 发布说明补充：补充分架构 APK（ARM64 / ARMv7 / x86_64）编译指南与规范，明确二进制包走 GitHub Releases 发布。
+  - **Git 仓库二进制安全审计**：
+    - `git check-ignore -v` 验证确认：`build/app/outputs/flutter-apk/*.apk` 与 `build/windows/x64/runner/Release/*.exe` 100% 命中 `.gitignore` 的 `build/` 与 `*.apk` 规则。
+    - `git status` 与 `git ls-files` 验证确认：当前 Git 工作区与暂存区没有任何 `.apk` 或 `.exe` 文件，推送到远程仓库时**绝对不会包含任何二进制安装包**，彻底杜绝仓库臃肿或触发 Gitee 100MB 限制。
+
+### 14. 产物精简：仅保留主流架构 arm64-v8a 安装包（2026-10-11 10:44:00）
+
+- **成果**：
+  - 严格遵循系统安全删除规范，使用回收站安全删除机制将 `app-armeabi-v7a-release.apk` 与 `app-x86_64-release.apk`（含 sha1 校验文件）移入 Windows 系统回收站。
+  - 当前 `build/app/outputs/flutter-apk/` 目录下仅保留现代 Android 手机专属的 [app-arm64-v8a-release.apk](file:///d:/AIcursorclaude/ai_girlfriend_vrm/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk)（131.0 MB）。
+
+
+
+

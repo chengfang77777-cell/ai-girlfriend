@@ -66,7 +66,7 @@ test('each response triggers exactly one facial pulse, even for repeated moods',
   const html=fs.readFileSync(require.resolve('../assets/web/vrm_viewer.html'),'utf8');
   const source=html.slice(html.indexOf('async function triggerAction('), html.indexOf('// 兼容旧入口'));
   const moods=[];
-  const context=vm.createContext({console:{log(){}}, ACTION_MAP:{}, EMOTION_EXPRESSIONS:Emotion.PROFILES,
+  const context=vm.createContext({highFive:null,console:{log(){}}, ACTION_MAP:{}, EMOTION_EXPRESSIONS:Emotion.PROFILES,
     window:{EmotionDriver:Emotion}, _isGreetingDone:true, setEmotion:e=>moods.push(e)});
   vm.runInContext(source, context);
   await context.triggerAction('talk','happy'); await context.triggerAction('talk','happy');
@@ -127,7 +127,8 @@ test('both model loading entry points cancel the previous reply before asynchron
   const html=fs.readFileSync(require.resolve('../assets/web/vrm_viewer.html'),'utf8');
   const source=html.slice(html.indexOf('async function loadModel('),html.indexOf('function _applyPose('));
   const em=manager(), d=Emotion.createDriver();
-  const context=vm.createContext({currentVrm:null, setEmotion:value=>d.setEmotion(value),
+  const cancellations=[];
+  const context=vm.createContext({_bodyRequest:0,_fades:[],_clipCache:{},highFive:{cancel:immediate=>cancellations.push(immediate)},currentVrm:null, setEmotion:value=>d.setEmotion(value),
     fetch:async()=>{throw new Error('test load');},
     loader:{parseAsync:async()=>{throw new Error('test load');}}, sendToFlutter(){}});
   vm.runInContext(source,context);
@@ -138,13 +139,14 @@ test('both model loading entry points cancel the previous reply before asynchron
     advance(d,em,2);
     assert.ok(faceValues(em).every(v=>v===0),entry);
   }
+  assert.deepEqual(cancellations,[true,true]);
 });
 
 test('explicit neutral emotion is preserved even when the body action is happy', async () => {
   const html=fs.readFileSync(require.resolve('../assets/web/vrm_viewer.html'),'utf8');
   const source=html.slice(html.indexOf('async function triggerAction('), html.indexOf('// 兼容旧入口'));
   const moods=[];
-  const context=vm.createContext({console:{log(){}}, ACTION_MAP:{happy:{emotion:'happy'}},
+  const context=vm.createContext({highFive:null,console:{log(){}}, ACTION_MAP:{happy:{emotion:'happy'}},
     EMOTION_EXPRESSIONS:Emotion.PROFILES, _isGreetingDone:false,
     setEmotion:(e,id)=>moods.push([e,id])});
   vm.runInContext(source,context);
@@ -156,7 +158,7 @@ test('neutral talk clears a role reaction without entering conversation or stopp
   const html=fs.readFileSync(require.resolve('../assets/web/vrm_viewer.html'),'utf8');
   const source=html.slice(html.indexOf('async function triggerAction('), html.indexOf('// 兼容旧入口'));
   const d=Emotion.createDriver(); d.setEmotion('happy','previous-role');
-  const context=vm.createContext({console:{log(){}}, ACTION_MAP:{},
+  const context=vm.createContext({highFive:null,console:{log(){}}, ACTION_MAP:{},
     EMOTION_EXPRESSIONS:Emotion.PROFILES, _isGreetingDone:true, _isInConversation:false,
     setEmotion:(e,id)=>d.setEmotion(e,id), stopIdleTimer(){throw new Error('idle must continue');}});
   vm.runInContext(source,context);

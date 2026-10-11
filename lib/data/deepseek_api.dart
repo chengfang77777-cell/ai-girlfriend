@@ -50,12 +50,14 @@ class DeepSeekApi {
     required Character character,
     required List<Message> history,
     required String userMessage,
+    String? additionalSystemPrompt,
   }) async {
     _validateInput(character, userMessage);
     _resetCounterIfNeeded();
 
     final url = Uri.parse(_buildApiUrl());
-    final messages = _buildMessages(character, history, userMessage);
+    final messages =
+        _buildMessages(character, history, userMessage, additionalSystemPrompt);
     final requestBody = _buildRequestBody(messages);
 
     Map<String, String> result;
@@ -123,6 +125,7 @@ class DeepSeekApi {
     Character character,
     List<Message> history,
     String userMessage,
+    String? additionalSystemPrompt,
   ) {
     final messages = <Map<String, dynamic>>[];
 
@@ -131,6 +134,11 @@ class DeepSeekApi {
       'role': 'system',
       'content': character.buildSystemPrompt(),
     });
+
+    final modeContext = additionalSystemPrompt?.trim();
+    if (modeContext != null && modeContext.isNotEmpty) {
+      messages.add({'role': 'system', 'content': modeContext});
+    }
 
     // 滑动窗口：只保留最近N轮对话
     final recentHistory = history.length > AppConstants.contextWindowSize

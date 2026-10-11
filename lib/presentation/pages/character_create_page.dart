@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/character_provider.dart';
+import '../../core/theme.dart';
 import '../../models/character.dart';
 
 class CharacterCreatePage extends ConsumerStatefulWidget {
@@ -13,8 +14,7 @@ class CharacterCreatePage extends ConsumerStatefulWidget {
       _CharacterCreatePageState();
 }
 
-class _CharacterCreatePageState
-    extends ConsumerState<CharacterCreatePage> {
+class _CharacterCreatePageState extends ConsumerState<CharacterCreatePage> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _nameController;
   late TextEditingController _ageController;
@@ -30,10 +30,26 @@ class _CharacterCreatePageState
   bool get _isEditing => widget.editingCharacter != null;
 
   static const List<String> _availableTraits = [
-    '温柔', '活泼', '知性', '傲娇', '治愈',
-    '体贴', '可爱', '成熟', '开朗', '包容',
-    '幽默', '冷静', '热情', '神秘', '优雅',
-    '元气', '软萌', '粘人', '腹黑', '天真',
+    '温柔',
+    '活泼',
+    '知性',
+    '傲娇',
+    '治愈',
+    '体贴',
+    '可爱',
+    '成熟',
+    '开朗',
+    '包容',
+    '幽默',
+    '冷静',
+    '热情',
+    '神秘',
+    '优雅',
+    '元气',
+    '软萌',
+    '粘人',
+    '腹黑',
+    '天真',
   ];
 
   // 可选的 VRM 建模
@@ -56,16 +72,14 @@ class _CharacterCreatePageState
     _nameController = TextEditingController(text: char?.name ?? '');
     _ageController =
         TextEditingController(text: char != null ? '${char.age}' : '');
-    _styleController =
-        TextEditingController(text: char?.speakingStyle ?? '');
+    _styleController = TextEditingController(text: char?.speakingStyle ?? '');
     _voiceDescController =
         TextEditingController(text: char?.voiceDescription ?? '');
     _otherWechatNameController =
         TextEditingController(text: char?.wechatOtherName ?? '');
     _myWechatNameController =
         TextEditingController(text: char?.wechatMyName ?? '');
-    _chatLogController =
-        TextEditingController(text: char?.wechatChatLog ?? '');
+    _chatLogController = TextEditingController(text: char?.wechatChatLog ?? '');
     if (char != null) {
       _selectedTraits.addAll(char.personalityTags);
       // 从已有角色的 modelPath 提取文件名
@@ -141,9 +155,13 @@ class _CharacterCreatePageState
 
     try {
       if (_isEditing) {
-        await ref.read(characterNotifierProvider.notifier).updateCharacter(character);
+        await ref
+            .read(characterNotifierProvider.notifier)
+            .updateCharacter(character);
       } else {
-        await ref.read(characterNotifierProvider.notifier).addCharacter(character);
+        await ref
+            .read(characterNotifierProvider.notifier)
+            .addCharacter(character);
         // Set the newly created character as current
         ref.read(currentCharacterIdProvider.notifier).state = character.id;
       }
@@ -171,6 +189,22 @@ class _CharacterCreatePageState
     Navigator.of(context).pop();
   }
 
+  Widget _formSection(String title, List<Widget> children) {
+    return Card(
+        child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title,
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 20),
+        ...children,
+      ]),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -178,363 +212,399 @@ class _CharacterCreatePageState
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? '编辑角色' : '创建新角色'),
-        centerTitle: true,
+        centerTitle: false,
       ),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            // Avatar preview
-            Center(
-              child: CircleAvatar(
-                radius: 50,
-                backgroundColor: colorScheme.primaryContainer,
-                child: Text(
-                  _nameController.text.isNotEmpty
-                      ? _nameController.text.substring(0, 1)
-                      : '?',
-                  style: TextStyle(
-                    fontSize: 36,
-                    color: colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Model selector
-            Text(
-              '选择建模',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 100,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _availableModels.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, index) {
-                  final model = _availableModels[index];
-                  final isSelected = _selectedModel == model['file'];
-                  return GestureDetector(
-                    onTap: () => setState(() => _selectedModel = model['file']!),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 80,
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? colorScheme.primaryContainer
-                            : colorScheme.surfaceContainerHighest.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isSelected
-                              ? colorScheme.primary
-                              : Colors.transparent,
-                          width: 2,
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.view_in_ar,
-                            size: 32,
-                            color: isSelected
-                                ? colorScheme.primary
-                                : colorScheme.outline,
+      body: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 860),
+              child: Form(
+                key: _formKey,
+                child: ListView(
+                  padding: const EdgeInsets.all(24),
+                  children: [
+                    Text(_isEditing ? '继续认识她' : '让想象中的她，来到身边',
+                        style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 8),
+                    const Text('从外貌与性格开始，慢慢描绘你期待的陪伴。',
+                        style: TextStyle(color: AppTheme.textSecondary)),
+                    const SizedBox(height: 24),
+                    Card(
+                        child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Row(children: [
+                        CircleAvatar(
+                            radius: 32,
+                            backgroundColor: AppTheme.primaryLight,
+                            child: Text(
+                                _nameController.text.isEmpty
+                                    ? '?'
+                                    : _nameController.text.characters.first,
+                                style: const TextStyle(
+                                    fontSize: 28,
+                                    color: AppTheme.primaryDark))),
+                        const SizedBox(width: 20),
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(
+                                  _nameController.text.isEmpty
+                                      ? '你的专属角色'
+                                      : _nameController.text,
+                                  style:
+                                      Theme.of(context).textTheme.titleLarge),
+                              const SizedBox(height: 4),
+                              Text(
+                                  _selectedTraits.isEmpty
+                                      ? '每一点设定，都会让她更独特。'
+                                      : _selectedTraits.join(' · '),
+                                  style: const TextStyle(
+                                      color: AppTheme.textSecondary,
+                                      fontSize: 13)),
+                            ])),
+                      ]),
+                    )),
+                    const SizedBox(height: 28),
+                    // Model selector
+                    Text(
+                      '选择建模',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            model['name']!,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                    const SizedBox(height: 8),
+                    LayoutBuilder(builder: (context, constraints) {
+                      final columns =
+                          (constraints.maxWidth / 150).floor().clamp(2, 5);
+                      final width =
+                          (constraints.maxWidth - (columns - 1) * 12) / columns;
+                      return Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: _availableModels.map((model) {
+                            final selected = _selectedModel == model['file'];
+                            return SizedBox(
+                                width: width,
+                                child: Semantics(
+                                  selected: selected,
+                                  child: Material(
+                                    color: selected
+                                        ? AppTheme.primarySoft
+                                        : AppTheme.bgCardLight,
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        side: BorderSide(
+                                            color: selected
+                                                ? AppTheme.primaryColor
+                                                : AppTheme.border)),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: InkWell(
+                                      onTap: () => setState(() =>
+                                          _selectedModel = model['file']!),
+                                      child: Padding(
+                                          padding: const EdgeInsets.all(16),
+                                          child: Column(children: [
+                                            Icon(
+                                                selected
+                                                    ? Icons.check_circle_outline
+                                                    : Icons.view_in_ar_outlined,
+                                                size: 25),
+                                            const SizedBox(height: 10),
+                                            Text(model['name']!,
+                                                style: const TextStyle(
+                                                    fontSize: 13,
+                                                    fontWeight:
+                                                        FontWeight.w600)),
+                                            const SizedBox(height: 4),
+                                            Text(model['desc']!,
+                                                style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: AppTheme
+                                                        .textSecondary)),
+                                          ])),
+                                    ),
+                                  ),
+                                ));
+                          }).toList());
+                    }),
+                    const SizedBox(height: 28),
+                    _formSection('基本信息', [
+                      // Name field
+                      TextFormField(
+                        controller: _nameController,
+                        decoration: const InputDecoration(
+                          labelText: '角色名字',
+                          hintText: '输入角色的名字',
+                          prefixIcon: Icon(Icons.person),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return '请输入角色名字';
+                          }
+                          if (value.trim().length > 20) {
+                            return '名字不能超过20个字符';
+                          }
+                          return null;
+                        },
+                        onChanged: (_) => setState(() {}),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Age field
+                      TextFormField(
+                        controller: _ageController,
+                        decoration: const InputDecoration(
+                          labelText: '年龄',
+                          hintText: '输入角色年龄',
+                          prefixIcon: Icon(Icons.cake),
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value != null && value.isNotEmpty) {
+                            final age = int.tryParse(value);
+                            if (age == null || age < 1 || age > 999) {
+                              return '请输入有效的年龄（1-999）';
+                            }
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                    ]),
+                    const SizedBox(height: 24),
+                    _formSection('性格与声音', [
+                      // Personality traits
+                      Text(
+                        '性格标签',
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '选择角色的性格特点（至少选择一个）',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: _availableTraits.map((trait) {
+                          final isSelected = _selectedTraits.contains(trait);
+                          return FilterChip(
+                            label: Text(trait),
+                            selected: isSelected,
+                            onSelected: (_) => _toggleTrait(trait),
+                            selectedColor: colorScheme.primaryContainer,
+                            checkmarkColor: colorScheme.onPrimaryContainer,
+                            labelStyle: TextStyle(
                               color: isSelected
                                   ? colorScheme.onPrimaryContainer
                                   : colorScheme.onSurface,
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                          Text(
-                            model['desc']!,
-                            style: TextStyle(
-                              fontSize: 9,
-                              color: isSelected
-                                  ? colorScheme.primary
-                                  : colorScheme.outline,
-                            ),
-                          ),
-                        ],
+                          );
+                        }).toList(),
                       ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 32),
-
-            // Name field
-            TextFormField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: '角色名字',
-                hintText: '输入角色的名字',
-                prefixIcon: Icon(Icons.person),
-              ),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请输入角色名字';
-                }
-                if (value.trim().length > 20) {
-                  return '名字不能超过20个字符';
-                }
-                return null;
-              },
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 16),
-
-            // Age field
-            TextFormField(
-              controller: _ageController,
-              decoration: const InputDecoration(
-                labelText: '年龄',
-                hintText: '输入角色年龄',
-                prefixIcon: Icon(Icons.cake),
-              ),
-              keyboardType: TextInputType.number,
-              validator: (value) {
-                if (value != null && value.isNotEmpty) {
-                  final age = int.tryParse(value);
-                  if (age == null || age < 1 || age > 999) {
-                    return '请输入有效的年龄（1-999）';
-                  }
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 24),
-
-            // Personality traits
-            Text(
-              '性格标签',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '选择角色的性格特点（至少选择一个）',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.outline,
-                  ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: _availableTraits.map((trait) {
-                final isSelected = _selectedTraits.contains(trait);
-                return FilterChip(
-                  label: Text(trait),
-                  selected: isSelected,
-                  onSelected: (_) => _toggleTrait(trait),
-                  selectedColor: colorScheme.primaryContainer,
-                  checkmarkColor: colorScheme.onPrimaryContainer,
-                  labelStyle: TextStyle(
-                    color: isSelected
-                        ? colorScheme.onPrimaryContainer
-                        : colorScheme.onSurface,
-                  ),
-                );
-              }).toList(),
-            ),
-            if (_selectedTraits.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '已选择: ${_selectedTraits.join('、')}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colorScheme.primary,
-                      ),
-                ),
-              ),
-            const SizedBox(height: 24),
-
-            // Speaking style (可选)
-            TextFormField(
-              controller: _styleController,
-              decoration: const InputDecoration(
-                labelText: '说话风格（可选）',
-                hintText: '描述角色说话的方式和语气...',
-                prefixIcon: Icon(Icons.record_voice_over),
-                alignLabelWithHint: true,
-              ),
-              maxLines: 4,
-              minLines: 2,
-              validator: (value) {
-                if (value != null && value.trim().length > 500) {
-                  return '描述不能超过500个字符';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Text(
-                '可选。留空则由 AI 根据性格标签和聊天记录自然发挥',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.outline,
-                    ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Voice description
-            TextFormField(
-              controller: _voiceDescController,
-              decoration: const InputDecoration(
-                labelText: '音色描述（可选）',
-                hintText: '例如：温柔甜美的年轻女声，语速稍慢，带有撒娇感...',
-                prefixIcon: Icon(Icons.mic),
-                alignLabelWithHint: true,
-              ),
-              maxLines: 3,
-              minLines: 2,
-              validator: (value) {
-                if (value != null && value.trim().length > 300) {
-                  return '描述不能超过300个字符';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Text(
-                '使用文本描述来设计专属音色，留空则使用默认音色',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.outline,
-                    ),
-              ),
-            ),
-            const SizedBox(height: 32),
-
-            // 微信聊天风格模仿
-            Card(
-              elevation: 0,
-              color: colorScheme.surfaceContainerHighest.withOpacity(0.5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.chat_bubble_outline,
-                            color: colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Text(
-                          '微信聊天风格模仿',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '可选。粘贴你和对方的微信聊天记录，创建角色后，她在主界面和你聊天时会一直模仿聊天记录中这个人的语气',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: colorScheme.outline,
-                          ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _otherWechatNameController,
-                            decoration: const InputDecoration(
-                              labelText: '对方微信名',
-                              hintText: '要模仿的人',
-                              prefixIcon: Icon(Icons.person_outline),
-                              isDense: true,
-                            ),
+                      if (_selectedTraits.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            '已选择: ${_selectedTraits.join('、')}',
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: colorScheme.primary,
+                                    ),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _myWechatNameController,
-                            decoration: const InputDecoration(
-                              labelText: '我的微信名',
-                              hintText: '你自己',
-                              prefixIcon: Icon(Icons.person),
-                              isDense: true,
-                            ),
-                          ),
+                      const SizedBox(height: 24),
+
+                      // Speaking style (可选)
+                      TextFormField(
+                        controller: _styleController,
+                        decoration: const InputDecoration(
+                          labelText: '说话风格（可选）',
+                          hintText: '描述角色说话的方式和语气...',
+                          prefixIcon: Icon(Icons.record_voice_over),
+                          alignLabelWithHint: true,
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _chatLogController,
-                      decoration: const InputDecoration(
-                        labelText: '聊天记录',
-                        hintText: '示例：\n我：在干嘛呢\n小美：刚下班，累死了\n我：晚上一起吃饭？\n小美：行啊，你来接我',
-                        alignLabelWithHint: true,
+                        maxLines: 4,
+                        minLines: 2,
+                        validator: (value) {
+                          if (value != null && value.trim().length > 500) {
+                            return '描述不能超过500个字符';
+                          }
+                          return null;
+                        },
                       ),
-                      maxLines: 7,
-                      minLines: 5,
-                    ),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Text(
-                        '留空则按普通方式聊天；填写后她会用聊天记录里「对方微信名」的口吻和你对话',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: colorScheme.outline,
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          '可选。留空则由 AI 根据性格标签和聊天记录自然发挥',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Voice description
+                      TextFormField(
+                        controller: _voiceDescController,
+                        decoration: const InputDecoration(
+                          labelText: '音色描述（可选）',
+                          hintText: '例如：温柔甜美的年轻女声，语速稍慢，带有撒娇感...',
+                          prefixIcon: Icon(Icons.mic),
+                          alignLabelWithHint: true,
+                        ),
+                        maxLines: 3,
+                        minLines: 2,
+                        validator: (value) {
+                          if (value != null && value.trim().length > 300) {
+                            return '描述不能超过300个字符';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          '使用文本描述来设计专属音色，留空则使用默认音色',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                    ]),
+                    const SizedBox(height: 24),
+                    // 微信聊天风格模仿
+                    Card(
+                      elevation: 0,
+                      color: AppTheme.bgCardLight,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.chat_bubble_outline,
+                                    color: colorScheme.primary),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '微信聊天风格模仿',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w600),
+                                ),
+                              ],
                             ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '可选。粘贴你和对方的微信聊天记录，创建角色后，她在主界面和你聊天时会一直模仿聊天记录中这个人的语气',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _otherWechatNameController,
+                                    decoration: const InputDecoration(
+                                      labelText: '对方微信名',
+                                      hintText: '要模仿的人',
+                                      prefixIcon: Icon(Icons.person_outline),
+                                      isDense: true,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _myWechatNameController,
+                                    decoration: const InputDecoration(
+                                      labelText: '我的微信名',
+                                      hintText: '你自己',
+                                      prefixIcon: Icon(Icons.person),
+                                      isDense: true,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _chatLogController,
+                              decoration: const InputDecoration(
+                                labelText: '聊天记录',
+                                hintText:
+                                    '示例：\n我：在干嘛呢\n小美：刚下班，累死了\n我：晚上一起吃饭？\n小美：行啊，你来接我',
+                                alignLabelWithHint: true,
+                              ),
+                              maxLines: 7,
+                              minLines: 5,
+                            ),
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              child: Text(
+                                '留空则按普通方式聊天；填写后她会用聊天记录里「对方微信名」的口吻和你对话',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // Save button
+                    FilledButton(
+                      onPressed: _isSaving ? null : () => _saveCharacter(),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 56),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: _isSaving
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2.5, color: Colors.white),
+                            )
+                          : Text(
+                              _isEditing ? '保存修改' : '创建角色',
+                              style: const TextStyle(fontSize: 15),
+                            ),
                     ),
                   ],
                 ),
-              ),
-            ),
-            const SizedBox(height: 32),
-
-            // Save button
-            FilledButton(
-              onPressed: _isSaving ? null : () => _saveCharacter(),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(double.infinity, 56),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2.5),
-                    )
-                  : Text(
-                      _isEditing ? '保存修改' : '创建角色',
-                      style: const TextStyle(fontSize: 18),
-                    ),
-            ),
-          ],
-        ),
-      ),
+              ))),
     );
   }
 }

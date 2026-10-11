@@ -41,6 +41,7 @@ class AppConstants {
   static const String mimoApiKeyKey = 'mimo_api_key';
   static const String autoPlayKey = 'auto_play_voice';
   static const String backgroundKey = 'background_id';
+  static const String backgroundMotionKey = 'background_motion';
 
   // Default values
   static const String defaultGreeting = '你终于来啦～等你好久了呢！今天想聊什么呢？';

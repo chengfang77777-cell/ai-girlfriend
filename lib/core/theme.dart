@@ -2,69 +2,76 @@ import 'package:flutter/material.dart';
 
 class AppTheme {
   // Primary colors
-  static const Color primaryColor = Color(0xFFFF69B4);
-  static const Color primaryLight = Color(0xFFFFB6C1);
-  static const Color primaryDark = Color(0xFFDB468B);
-  static const Color primarySoft = Color(0xFFFFE4EB);
+  static const Color primaryColor = Color(0xFF527564);
+  static const Color primaryLight = Color(0xFFDCE6DB);
+  static const Color primaryDark = Color(0xFF365746);
+  static const Color primarySoft = Color(0xFFEAF0E8);
 
   // Accent colors
-  static const Color accentPink = Color(0xFFFF85A1);
-  static const Color accentRose = Color(0xFFFF6B8A);
-  static const Color accentPeach = Color(0xFFFFAFB0);
+  static const Color accentPink = Color(0xFFC48792);
+  static const Color accentRose = Color(0xFFB87986);
+  static const Color accentPeach = Color(0xFFE6C8BE);
 
   // Warm palette aliases
-  static const Color warmPink = Color(0xFFFF69B4);
-  static const Color warmPeach = Color(0xFFFFDAB9);
+  static const Color warmPink = Color(0xFF527564);
+  static const Color warmPeach = Color(0xFFF0E3D3);
 
   // Background colors
-  static const Color bgLight = Color(0xFFFFF5F7);
-  static const Color bgDark = Color(0xFF2D1B2E);
+  static const Color bgLight = Color(0xFFF6F5F0);
+  static const Color bgDark = Color(0xFF293D35);
   static const Color bgCardLight = Color(0xFFFFFFFF);
-  static const Color bgCardDark = Color(0xFF3D2840);
+  static const Color bgCardDark = Color(0xFF35473D);
 
   // Text colors
-  static const Color textPrimary = Color(0xFF2D1B2E);
-  static const Color textSecondary = Color(0xFF7A6B7B);
+  static const Color textPrimary = Color(0xFF293D35);
+  static const Color textSecondary = Color(0xFF69786F);
   static const Color textOnPrimary = Color(0xFFFFFFFF);
-  static const Color textHint = Color(0xFFBBA3B0);
+  static const Color textHint = Color(0xFF7E8B81);
 
   // Chat bubble colors
-  static const Color bubbleUser = Color(0xFFFFB6C1);
+  static const Color bubbleUser = Color(0xFFDCE6DB);
   static const Color bubbleAi = Color(0xFFFFFFFF);
-  static const Color bubbleUserText = Color(0xFF4A2040);
-  static const Color bubbleAiText = Color(0xFF2D1B2E);
+  static const Color bubbleUserText = Color(0xFF293D35);
+  static const Color bubbleAiText = Color(0xFF293D35);
 
   // Status / emotion indicator colors
-  static const Color happy = Color(0xFFFF6B9D);
-  static const Color shy = Color(0xFFFFB6C1);
-  static const Color angry = Color(0xFFFF4757);
-  static const Color sad = Color(0xFF7B8CDE);
-  static const Color surprised = Color(0xFFFFD93D);
-  static const Color neutral = Color(0xFFC4A0B4);
+  static const Color happy = Color(0xFF75927C);
+  static const Color shy = Color(0xFFDCE6DB);
+  static const Color angry = Color(0xFFBA5A58);
+  static const Color sad = Color(0xFF8191AC);
+  static const Color surprised = Color(0xFFC6A565);
+  static const Color neutral = Color(0xFF96A58F);
 
   // Border and divider
-  static const Color border = Color(0xFFF0DBE5);
-  static const Color divider = Color(0xFFF5E6EE);
+  static const Color border = Color(0xFFDDE2D8);
+  static const Color divider = Color(0xFFE8EBE2);
 
   // Shadow
-  static const Color shadow = Color(0x1AFF69B4);
+  static const Color shadow = Color(0x0D293D35);
 
   // Gradient colors for backgrounds
   static const List<Color> gradientWarm = [
-    Color(0xFFFFF0F3),
-    Color(0xFFFFE4EB),
-    Color(0xFFFFD6E0),
+    Color(0xFFF6F5F0),
+    Color(0xFFEAF0E8),
+    Color(0xFFF0F2EA),
   ];
 
   static const List<Color> gradientLove = [
-    Color(0xFFFF69B4),
-    Color(0xFFFF85A1),
-    Color(0xFFFFB6C1),
+    Color(0xFF527564),
+    Color(0xFFC48792),
+    Color(0xFFDCE6DB),
   ];
 
   static ThemeData get lightTheme {
     return ThemeData(
       useMaterial3: true,
+      fontFamily: 'Microsoft YaHei UI',
+      fontFamilyFallback: const [
+        'Microsoft YaHei',
+        'PingFang SC',
+        'Noto Sans CJK SC',
+        'sans-serif'
+      ],
       brightness: Brightness.light,
       colorScheme: const ColorScheme.light(
         primary: primaryColor,
@@ -82,27 +89,34 @@ class AppTheme {
         surface: bgLight,
         onSurface: textPrimary,
         onSurfaceVariant: textSecondary,
+        surfaceContainerHighest: primarySoft,
+        surfaceContainerLow: bgCardLight,
         outline: border,
         outlineVariant: divider,
       ),
       scaffoldBackgroundColor: bgLight,
       appBarTheme: const AppBarTheme(
-        backgroundColor: primaryColor,
-        foregroundColor: textOnPrimary,
+        backgroundColor: bgLight,
+        foregroundColor: textPrimary,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
-        centerTitle: true,
+        centerTitle: false,
+        toolbarHeight: 72,
         titleTextStyle: TextStyle(
-          color: textOnPrimary,
+          color: textPrimary,
           fontSize: 18,
           fontWeight: FontWeight.w600,
         ),
       ),
       cardTheme: CardTheme(
         color: bgCardLight,
-        elevation: 2,
+        surfaceTintColor: Colors.transparent,
+        margin: EdgeInsets.zero,
+        elevation: 0,
         shadowColor: shadow,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: border),
         ),
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
@@ -118,7 +132,7 @@ class AppTheme {
           foregroundColor: textOnPrimary,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(14),
           ),
           elevation: 2,
           shadowColor: shadow,
@@ -130,9 +144,22 @@ class AppTheme {
           side: const BorderSide(color: primaryColor),
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(14),
           ),
         ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+      ),
+      iconTheme: const IconThemeData(color: primaryColor, size: 22),
+      listTileTheme: const ListTileThemeData(
+        contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+        iconColor: primaryColor,
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
@@ -143,21 +170,22 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: bgCardLight,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: border),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: primaryColor, width: 2),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: angry),
         ),
         hintStyle: const TextStyle(color: textHint, fontSize: 14),
@@ -168,7 +196,8 @@ class AppTheme {
         backgroundColor: primarySoft,
         selectedColor: primaryColor,
         labelStyle: const TextStyle(color: primaryDark, fontSize: 13),
-        secondaryLabelStyle: const TextStyle(color: textOnPrimary, fontSize: 13),
+        secondaryLabelStyle:
+            const TextStyle(color: textOnPrimary, fontSize: 13),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
@@ -236,52 +265,61 @@ class AppTheme {
         ),
       ),
       tabBarTheme: const TabBarTheme(
-        labelColor: textOnPrimary,
-        unselectedLabelColor: textOnPrimary,
-        indicatorColor: textOnPrimary,
+        labelColor: primaryColor,
+        unselectedLabelColor: textSecondary,
+        indicatorColor: primaryColor,
         labelStyle: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-        unselectedLabelStyle: TextStyle(fontWeight: FontWeight.w400, fontSize: 14),
+        unselectedLabelStyle:
+            TextStyle(fontWeight: FontWeight.w400, fontSize: 14),
       ),
       textTheme: const TextTheme(
         headlineLarge: TextStyle(
           fontSize: 28,
           fontWeight: FontWeight.bold,
           color: textPrimary,
+          height: 1.5,
         ),
         headlineMedium: TextStyle(
           fontSize: 24,
           fontWeight: FontWeight.w600,
           color: textPrimary,
+          height: 1.5,
         ),
         headlineSmall: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.w600,
           color: textPrimary,
+          height: 1.5,
         ),
         titleLarge: TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.w600,
           color: textPrimary,
+          height: 1.5,
         ),
         titleMedium: TextStyle(
           fontSize: 16,
           fontWeight: FontWeight.w500,
           color: textPrimary,
+          height: 1.5,
         ),
         titleSmall: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w500,
           color: textPrimary,
+          height: 1.5,
         ),
         bodyLarge: TextStyle(
           fontSize: 16,
           fontWeight: FontWeight.w400,
           color: textPrimary,
+          height: 1.5,
         ),
         bodyMedium: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w400,
           color: textPrimary,
+          height: 1.5,
         ),
         bodySmall: TextStyle(
           fontSize: 12,
@@ -297,6 +335,7 @@ class AppTheme {
           fontSize: 12,
           fontWeight: FontWeight.w500,
           color: textPrimary,
+          height: 1.5,
         ),
         labelSmall: TextStyle(
           fontSize: 10,

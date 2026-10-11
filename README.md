@@ -15,10 +15,13 @@
 
 一个用 Flutter 开发的 AI 女友应用，将 **大语言模型对话**、**语音合成** 与 **3D VRM 虚拟形象** 深度融合：
 
-- 与 AI 角色自然聊天（基于 DeepSeek `deepseek-chat`）
+- 自由选择与切换对话大模型（**DeepSeek** `deepseek-chat` 或 **小米 MiMo** `mimo-v2.5` / `mimo-v2.5-pro`）
 - AI 会根据对话内容**实时匹配情绪表情与身体动作**，说话时**口型同步**
 - 支持语音朗读与自定义音色（基于小米 MiMo TTS）
-- 覆盖 Windows 桌面、Android 手机以及 Web 端
+- **沉浸式伴读陪伴**：学习番茄钟、自习静音专注模式、专属庆祝动作与伴读音乐/白噪音
+- **趣味肢体交互**：击掌互动（High-Five）、抬手呼应与即时情绪反馈
+- **动态粒子伴读背景**：8 套沉浸式动态粒子背景（落樱、星空、萤火、飘雪等），支持动态幅度调节
+- 覆盖 **Windows 桌面端** 与 **Android 手机端**（两端全功能深度对齐），提供即装即用的 Release 安装包
 
 ---
 
@@ -26,17 +29,22 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 💬 **AI 对话** | 基于 DeepSeek `deepseek-chat` 模型，返回结构化 JSON（回复文本 + 情绪 + 动作），带滑动窗口上下文、指数退避重试、超时控制 |
-| 😊 **情绪系统** | 6 种情绪：开心 / 害羞 / 生气 / 难过 / 惊讶 / 平静。AI 自动识别并映射到 VRM 模型表情（VRM Blendshape） |
-| 🏃 **动作匹配** | 内置 10 个 VRMA 动画，AI 依据对话语义自动推断动作（鼓掌、道谢、摇头、打招呼、打哈欠、生气等），动作间平滑交叉淡入，并自动回落到待机动画 |
-| 👄 **口型同步** | 基于 AudioWorklet 的实时口型驱动，播放语音时角色嘴唇同步开合 |
-| 🔊 **语音合成 (TTS)** | 小米 MiMo `mimo-v2.5-tts`，预设「冰糖」「茉莉」音色，支持自动朗读开关 |
+| 💬 **AI 对话双引擎** | 支持 **DeepSeek**（`deepseek-chat`）与 **小米 MiMo**（`mimo-v2.5` / `mimo-v2.5-pro`）自由切换，统一结构化 JSON（回复文本 + 情绪 + 动作），滑动窗口上下文与自动重试 |
+| 📖 **专注伴读模式** | 番茄钟自习陪伴与阶段专注计时，开启后角色进入静音专注状态（仅保留自然呼吸与微表情，无无关动作干扰），完成目标触发专属庆祝动效与音效 |
+| 🎵 **伴读音乐与白噪音** | 内置专注轻音乐与白噪音控制面板，可随时启闭并独立调节音量，学习工作更沉浸 |
+| ✋ **击掌互动 (High-Five)** | 随时发起与女友击掌，角色抬手响应、等待击掌、命中庆祝，全程防连击且自动恢复待机（Windows 与 Android 双端完全对齐） |
+| 🌌 **动态伴读背景** | 8 套沉浸式动态主题（梦幻星空、落樱纷飞、温馨小窝、渐变柔光、清新草甸、日落黄昏、冰雪世界、神秘夜幕），带实时粒子渲染与 3 级动态幅度调节（微动/生动/静止） |
+| 😊 **情绪系统** | 8 种情绪（开心 / 害羞 / 生气 / 难过 / 惊讶 / 平静 / 拒绝 / 感谢），AI 自动识别并平滑过渡到 VRM Blendshape 表情 |
+| 🏃 **动作匹配** | 内置 10 个 VRMA 动画，依据语义推断动作，基于 smoothstep 曲线平滑交叉淡入，并自动回落到待机 |
+| 👄 **口型同步** | 基于 AudioWorklet / Web Audio API 的频谱分析实时驱动 Viseme 通道，播放语音嘴唇同步开合 |
+| 🔊 **语音合成 (TTS)** | 小米 MiMo `mimo-v2.5-tts`，预设「冰糖」「茉莉」等音色，支持自动朗读开关 |
 | 🎨 **自定义音色** | 通过 `mimo-v2.5-tts-voicedesign` 用文字描述设计专属声线 |
 | 👧 **预设角色** | 7 个性格迥异的角色：温柔学姐、活泼青梅、傲娇同桌、知性御姐、治愈邻家、拉姆、蕾姆 |
-| 🧑‍🎨 **自定义角色** | 自由创建角色：设定姓名、年龄、性格标签、说话风格（可选），绑定自己的 VRM 模型与音色 |
-| 🗨️ **微信风格模仿** | 创建角色时上传真实微信聊天记录（含对方微信名与自己的微信名），角色在对话中会**始终模仿记录中「对方」的语气**——口头禅、用词习惯、句子长短、表情与标点，如同和本人聊天 |
-| 💾 **本地存储** | 基于 Hive 持久化保存角色、聊天记录（单角色上限 5000 条）与设置，数据完全本地 |
-| 🖼️ **聊天背景** | 多套渐变背景自由切换，每个角色有默认背景 |
+| 🧑‍🎨 **自定义角色** | 自由创建角色：姓名、性格、说话风格，绑定专属 VRM 模型与声线 |
+| 🗨️ **微信风格模仿** | 上传真实微信聊天记录，角色在对话中模仿「对方」的用词、语气、标点与表情习惯 |
+| 🧹 **聊天记录管理** | 支持单角色聊天一键清空（聊天页快捷按钮/卡片菜单）与全局记录一键清空（设置页二次确认） |
+| 🔑 **纯界面密钥配置** | DeepSeek 与 MiMo 密钥 100% 支持在设置页图形化配置并存入本地 Hive，源码零明文泄露 |
+| 💾 **本地存储** | 基于 Hive 本地加密存储角色、消息与设置，无任何云端数据库依赖，保护隐私 |
 
 ---
 
@@ -171,15 +179,22 @@ flutter run -d chrome
 #### 5. 构建发布包
 
 ```bash
-flutter build windows            # 生成 Windows 桌面安装目录 build/windows/
-flutter build apk --release      # 生成 Android APK：build/app/outputs/flutter-apk/app-release.apk
+# Windows 桌面版 Release
+flutter build windows --release
+# 生成 Windows 绿色可执行目录：build/windows/x64/runner/Release/ai_girlfriend.exe
+
+# Android 手机版分架构 Release（推荐，包体小适配好）
+flutter build apk --release --split-per-abi
+# 生成 3 个架构分包：
+# 1. build/app/outputs/flutter-apk/app-arm64-v8a-release.apk  (约 131MB，主流手机首选)
+# 2. build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk (约 128MB，老旧32位手机)
+# 3. build/app/outputs/flutter-apk/app-x86_64-release.apk      (约 132MB，模拟器/平板)
 ```
 
-> 首次构建会自动重建 `build/`、`.dart_tool/`、`windows/flutter/ephemeral/` 等缓存目录，无需手动创建。
-
-> 📱 **可直接安装的 APK**：执行 `flutter build apk --release` 后，产物 `build/app/outputs/flutter-apk/app-release.apk` 就是**可以直接在手机上使用的安装包** —— 将该 APK 文件传到 Android 手机（微信 / 网盘 / USB 等方式均可），点击即可安装使用，无需搭建 Flutter 环境。
+> 📱 **可直接安装的手机 APK**：日常使用推荐将 `app-arm64-v8a-release.apk` 发送至 Android 手机（微信文件传输、QQ、USB 数据线或网盘），点击即可直接安装使用，无需配置任何开发环境。
 >
-> 已构建好的发布版 APK 请从 [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases) 下载。
+> 📦 **二进制发布包规范**：
+> 编译产物（`.apk` 与 `.exe`）体积较大（包含 3D VRM 模型与 Web 渲染资源），已被 `.gitignore` 排除，**不会提交至 Git 代码仓库**（防止代码库膨胀及触发 Gitee 100MB 单文件限制）。所有编译好的成品一律通过 [GitHub Releases](https://github.com/chengfang77777-cell/ai-girlfriend/releases) 发布与分发。
 
 ---
 

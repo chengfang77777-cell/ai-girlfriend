@@ -1,6 +1,6 @@
 import 'dart:io' show Platform;
 import 'dart:convert';
-import 'dart:math' show sin;
+import 'dart:math' show sin, min;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,6 +14,9 @@ import '../widgets/avatar_display.dart'
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input.dart';
 import '../widgets/chat_wheel_region.dart';
+import '../widgets/high_five_control.dart';
+import '../widgets/study_panel.dart';
+import '../widgets/study_music_panel.dart';
 import 'character_list_page.dart';
 import 'settings_page.dart';
 
@@ -34,6 +37,79 @@ class _HomePageState extends ConsumerState<HomePage> {
   int _scrollRetries = 0;
   int _replyGeneration = 0;
   String? _reactionId;
+  String _interactionState = 'idle';
+  bool _studyMode = false;
+  bool _studyQuiet = false;
+  bool _musicOpen = false;
+  bool _musicMinimized = false;
+  final ScrollController _studyScrollController = ScrollController();
+
+  void _stopStudyReply() {
+    if (!mounted) return;
+    ++_replyGeneration;
+    _reactionId = null;
+    ref.read(voiceNotifierProvider.notifier).stop();
+    _stopAvatarAudio();
+  }
+
+  void _setStudyQuiet(bool quiet) {
+    _stopStudyReply();
+    setState(() => _studyQuiet = quiet);
+  }
+
+  void _toggleStudy() {
+    ++_replyGeneration;
+    _reactionId = null;
+    ref.read(voiceNotifierProvider.notifier).stop();
+    _stopAvatarAudio();
+    _cancelHighFive();
+    setState(() {
+      _studyMode = !_studyMode;
+      if (!_studyMode) _musicOpen = false;
+      _studyQuiet = false;
+      _interactionState = 'idle';
+    });
+  }
+
+  Future<void> _studyReply(
+      String text, String emotion, bool celebrate, String action) async {
+    final character = ref.read(currentCharacterProvider);
+    if (!_studyMode || character == null) return;
+    final generation = ++_replyGeneration;
+    _reactionId = 'study:${character.id}:$generation';
+    ref.read(voiceNotifierProvider.notifier).stop();
+    // Local sound and gesture start immediately; remote speech can follow later.
+    final dynamic avatar = _avatarKey.currentState;
+    if (celebrate && avatar != null) {
+      try {
+        await avatar.celebrateStudyCompletion(_reactionId);
+      } catch (error) {
+        debugPrint('[Study] Completion effect unavailable: $error');
+      }
+    } else {
+      _triggerAction(action, emotion);
+    }
+    if (!mounted ||
+        !_studyMode ||
+        generation != _replyGeneration ||
+        ref.read(currentCharacterIdProvider) != character.id) return;
+    if (ref.read(autoPlayVoiceProvider)) {
+      final settingVoice = ref
+              .read(storageServiceProvider)
+              .getSetting<String>(AppConstants.ttsVoiceKey) ??
+          AppConstants.defaultVoice;
+      final rawVoice =
+          character.voiceName.isNotEmpty ? character.voiceName : settingVoice;
+      final voice =
+          const {'冰糖', '茉莉'}.contains(rawVoice) ? rawVoice : settingVoice;
+      ref.read(voiceNotifierProvider.notifier).speak(
+            _filterBrackets(text),
+            characterId: character.id,
+            voice: voice,
+            voiceDescription: character.voiceDescription,
+          );
+    }
+  }
 
   Future<void> _sendAudioToLipSync(Uint8List wavBytes) async {
     final dynamic state = _avatarKey.currentState;
@@ -72,6 +148,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _studyScrollController.dispose();
     _inputController.dispose();
     final voiceNotifier = ref.read(voiceNotifierProvider.notifier);
     voiceNotifier.stop();
@@ -86,7 +163,9 @@ class _HomePageState extends ConsumerState<HomePage> {
   /// 直到 maxScrollExtent 连续两帧不变为止。
   double? _lastJumpExtent;
   void _jumpToBottomIfNeeded() {
-    if (_didInitialScroll || _scrollRetries > 60) return;
+    if (!mounted || _studyMode || _didInitialScroll || _scrollRetries > 60) {
+      return;
+    }
     _scrollRetries++;
     if (!_scrollController.hasClients) {
       WidgetsBinding.instance
@@ -146,6 +225,32 @@ class _HomePageState extends ConsumerState<HomePage> {
       await state.stopAudio();
     } catch (error) {
       debugPrint('[HomePage] Stop audio failed: $error');
+    }
+  }
+
+  Future<bool> _startHighFive() async {
+    if (ref.read(isSendingProvider) ||
+        ref.read(voiceStatusProvider) != null ||
+        ref.read(currentCharacterProvider) == null) {
+      return false;
+    }
+    final dynamic state = _avatarKey.currentState;
+    if (state == null) return false;
+    try {
+      return await state.startHighFive() == true;
+    } catch (error) {
+      debugPrint('[HomePage] High five unavailable: $error');
+      return false;
+    }
+  }
+
+  Future<void> _cancelHighFive() async {
+    final dynamic state = _avatarKey.currentState;
+    if (state == null) return;
+    try {
+      await state.cancelHighFive();
+    } catch (error) {
+      debugPrint('[HomePage] Cancel high five failed: $error');
     }
   }
 
@@ -336,6 +441,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (previous == next) return;
       ++_replyGeneration;
       _reactionId = null;
+      _studyMode = false;
+      _musicOpen = false;
+      _studyQuiet = false;
       _triggerAction('talk', 'neutral');
       ref.read(voiceNotifierProvider.notifier).stop();
       _stopAvatarAudio();
@@ -346,341 +454,320 @@ class _HomePageState extends ConsumerState<HomePage> {
     final voiceStatus = ref.watch(voiceStatusProvider);
     final colorScheme = Theme.of(context).colorScheme;
     final background = ref.watch(currentBackgroundProvider);
+    final backgroundMotion = ref.watch(backgroundMotionProvider);
 
     // 进入应用/切换角色后，首帧直接跳到对话最底部
     if (character?.id != _lastCharacterId) {
       _lastCharacterId = character?.id;
+      _interactionState = 'idle';
       _didInitialScroll = false;
       _scrollRetries = 0;
       _lastJumpExtent = null;
     }
-    if (!_didInitialScroll && messages.isNotEmpty) {
+    if (!_studyMode && !_didInitialScroll && messages.isNotEmpty) {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _jumpToBottomIfNeeded());
     }
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        title: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.3),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            character?.name ?? 'AI 女友',
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
-              fontSize: 16,
-              shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
-            ),
-          ),
-        ),
-        centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        actions: [
-          Container(
-            margin: const EdgeInsets.only(right: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon:
-                  const Icon(Icons.delete_sweep_outlined, color: Colors.white),
-              onPressed: character == null ? null : _showClearChatConfirmation,
-              tooltip: '清除聊天记录',
-            ),
-          ),
-          Container(
-            margin: const EdgeInsets.only(right: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.people_alt_outlined, color: Colors.white),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const CharacterListPage()),
-                );
-              },
-              tooltip: '切换角色',
-            ),
-          ),
-          Container(
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.settings_outlined, color: Colors.white),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const SettingsPage()),
-                );
-              },
-              tooltip: '设置',
-            ),
-          ),
-        ],
-      ),
-      body: ChatWheelRegion(
-        controller: _scrollController,
-        onModelZoom: _zoomModel,
-        child: Stack(
-          children: [
-            // Layer 1: Full-screen 3D model background
-            // 注意：WebView 是原生 PlatformView，本身由系统独立合成层承载。
-            // 给它套 RepaintBoundary 反而会让 Flutter 每帧多建一个离屏合成层、
-            // 加重 GPU 合成负担（表现为模型+背景卡顿）。因此这里故意不包 RepaintBoundary，
-            // 聊天列表层与滚动条层同理也不包（滚动条用 CustomPaint 的 repaint 隔离重绘）。
-            Positioned.fill(
-              child: AvatarDisplay(
-                key: _avatarKey,
-                characterName: character?.name ?? '选择角色',
-                modelPath: character?.avatarModelPath,
-                currentEmotion: Emotion.neutral,
-                backgroundId: background.id,
-                onAudioStarted: () =>
-                    ref.read(voiceStatusProvider.notifier).state = '正在说话…',
-              ),
-            ),
-
-            // Layer 2: Chat messages
-            // ChatWheelRegion routes wheel input for the entire body.
-            // IgnorePointer lets drag pass through to webview for rotation.
-            // 注意：不包 RepaintBoundary。聊天列表是纯 Flutter 控件，包 RepaintBoundary
-            // 反而多建一个离屏合成层，与底层 WebView 原生层争抢 GPU，导致模型/背景卡顿。
-            // 聊天滚动流畅度已由 CustomPaint 滚动条（repaint: controller）保证。
-            Positioned(
-              left: 0,
-              right: 0,
-              top: MediaQuery.of(context).padding.top + 56,
-              bottom: 70,
-              child: IgnorePointer(
-                child: messages.isEmpty && !isSending
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+    final activeScroll =
+        _studyMode ? _studyScrollController : _scrollController;
+    final panel = _studyMode && character != null
+        ? StudyPanel(
+            key: ValueKey('study:${character.id}'),
+            scrollController: _studyScrollController,
+            onClose: _toggleStudy,
+            onQuietChanged: _setStudyQuiet,
+            onMessageStart: _stopStudyReply,
+            onReply: _studyReply,
+            onOpenMusic: () => setState(() {
+              if (_musicOpen && _musicMinimized) {
+                _musicMinimized = false;
+              } else {
+                _musicOpen = !_musicOpen;
+                _musicMinimized = false;
+              }
+            }),
+            musicOpen: _musicOpen,
+          )
+        : Material(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            clipBehavior: Clip.antiAlias,
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(22, 20, 12, 12),
+                child: Row(children: [
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              width: 60,
-                              height: 60,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: LinearGradient(
-                                  colors: [
-                                    colorScheme.primary.withOpacity(0.15),
-                                    colorScheme.primary.withOpacity(0.05)
-                                  ],
-                                ),
-                              ),
-                              child: Icon(Icons.chat_bubble_outline_rounded,
-                                  size: 30,
-                                  color: colorScheme.primary.withOpacity(0.5)),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              character != null
-                                  ? '💕 开始和${character.name}聊天吧'
-                                  : '选择一个角色开始聊天',
-                              style: TextStyle(
-                                  color: colorScheme.onSurface.withOpacity(0.5),
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500),
-                            ),
-                            const SizedBox(height: 6),
-                            Text('发送第一条消息，开启你们的对话',
-                                style: TextStyle(
-                                    color: colorScheme.outline.withOpacity(0.5),
-                                    fontSize: 12)),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                        itemCount: messages.length + (isSending ? 1 : 0),
-                        itemBuilder: (context, index) {
-                          if (isSending && index == messages.length) {
-                            return const _TypingIndicator();
-                          }
-
-                          final message = messages[index];
-                          final isUser = message.role == 'user';
-                          return ChatBubble(
-                            message: message.content,
-                            type: isUser ? MessageType.user : MessageType.ai,
-                            timestamp: message.timestamp,
-                            onCopy: () {},
-                            onDelete: () async {
-                              final id = character?.id;
-                              if (id == null) return;
-                              await ref
-                                  .read(chatNotifierProvider.notifier)
-                                  .deleteMessage(id, message.id);
-                              ref.read(messageRefreshProvider.notifier).state++;
+                        Text('慢慢说，我在听',
+                            style: Theme.of(context).textTheme.titleLarge),
+                        const SizedBox(height: 4),
+                        Text('和${character?.name ?? '她'}的日常',
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ])),
+                  IconButton(
+                      onPressed:
+                          character == null ? null : _showClearChatConfirmation,
+                      tooltip: '清除聊天记录',
+                      icon: const Icon(Icons.delete_outline_rounded, size: 20)),
+                ]),
+              ),
+              const Divider(),
+              Expanded(
+                  child: messages.isEmpty && !isSending
+                      ? Padding(
+                          padding: const EdgeInsets.all(30),
+                          child: Center(
+                              child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                Icon(Icons.forum_outlined,
+                                    size: 38,
+                                    color: colorScheme.primary.withOpacity(.5)),
+                                const SizedBox(height: 18),
+                                Text(character == null ? '选一个想见的人' : '今天过得怎么样？',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                                const SizedBox(height: 8),
+                                Text(
+                                    character == null
+                                        ? '从右上角进入角色列表。'
+                                        : '开心的小事，或者说不出口的烦恼，\n都可以在这里聊一聊。',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(height: 1.8)),
+                              ])))
+                      : Scrollbar(
+                          controller: _scrollController,
+                          thumbVisibility: true,
+                          child: ListView.builder(
+                            key: PageStorageKey('chat:${character?.id}'),
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 18),
+                            itemCount: messages.length + (isSending ? 1 : 0),
+                            itemBuilder: (context, index) {
+                              if (index == messages.length) {
+                                return const _TypingIndicator();
+                              }
+                              final message = messages[index];
+                              return ChatBubble(
+                                  key: ValueKey(message.id),
+                                  message: message.content,
+                                  type: message.role == 'user'
+                                      ? MessageType.user
+                                      : MessageType.ai,
+                                  timestamp: message.timestamp,
+                                  onCopy: () {},
+                                  onDelete: () async {
+                                    if (character == null) return;
+                                    await ref
+                                        .read(chatNotifierProvider.notifier)
+                                        .deleteMessage(
+                                            character.id, message.id);
+                                    ref
+                                        .read(messageRefreshProvider.notifier)
+                                        .state++;
+                                  });
                             },
-                          );
-                        },
-                      ),
-              ),
-            ),
+                          ))),
+              ChatInput(
+                  controller: _inputController,
+                  onSend: _sendMessage,
+                  isLoading: isSending),
+            ]),
+          );
 
-            // Layer 3: 可交互的聊天滚动条（覆盖在 IgnorePointer 之上，可拖动）
-            // 注：刻意不包 RepaintBoundary——聊天列表滚动重绘已由 _ThumbPainter
-            // 的 repaint: controller 隔离，额外包层反而加重 GPU 合成负担导致卡顿。
-            Positioned(
-              right: 0,
-              top: MediaQuery.of(context).padding.top + 56,
-              bottom: 70,
-              width: 16,
-              child: _ChatScrollbar(controller: _scrollController),
-            ),
-
-            if (voiceStatus != null)
-              Positioned(
-                  left: 16,
-                  bottom: 78,
-                  child: Material(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(16),
-                    child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        child: Text(voiceStatus,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 12))),
-                  )),
-            // Layer 4: Input area at bottom (interactive, stays on top)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: ChatInput(
-                onSend: _sendMessage,
-                isLoading: isSending,
+    return Scaffold(
+      body: SafeArea(
+          child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 16, 16, 16),
+          child: Row(children: [
+            Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                    color: colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(13)),
+                child: Icon(Icons.favorite_outline_rounded,
+                    size: 21, color: colorScheme.primary)),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(character?.name ?? '遇见，让日常柔软一点',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(_studyMode ? '一起专注，也允许偶尔歇一歇' : '留一点时间，给彼此',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall),
+                ])),
+            if (Platform.isWindows && character != null)
+              FilledButton.tonalIcon(
+                onPressed: isSending ? null : _toggleStudy,
+                icon: Icon(
+                    _studyMode
+                        ? Icons.chat_bubble_outline_rounded
+                        : Icons.menu_book_rounded,
+                    size: 18),
+                label: Text(_studyMode ? '回到聊天' : '陪我学习'),
               ),
-            ),
-          ],
+            const SizedBox(width: 8),
+            IconButton(
+                tooltip: '切换角色',
+                icon: const Icon(Icons.people_outline_rounded),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const CharacterListPage()))),
+            IconButton(
+                tooltip: '设置',
+                icon: const Icon(Icons.tune_rounded),
+                onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsPage()))),
+          ]),
         ),
-      ),
+        Expanded(child: LayoutBuilder(builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 900;
+          final sidebarWidth =
+              min(420.0, constraints.maxWidth * .35).clamp(360.0, 420.0);
+          final panelHeight =
+              wide ? constraints.maxHeight - 16 : constraints.maxHeight * .52;
+          return Stack(children: [
+            Positioned(
+                left: 16,
+                right: wide ? sidebarWidth + 32 : 16,
+                top: 0,
+                bottom: wide ? 16 : panelHeight + 28,
+                child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Stack(children: [
+                      Positioned.fill(
+                          child: ChatWheelRegion(
+                              controller: activeScroll,
+                              onModelZoom: _zoomModel,
+                              child: AvatarDisplay(
+                                key: _avatarKey,
+                                characterName: character?.name ?? '选择角色',
+                                modelPath: character?.avatarModelPath,
+                                currentEmotion: Emotion.neutral,
+                                backgroundId: background.id,
+                                backgroundMotion: backgroundMotion.name,
+                                studyQuiet: _studyQuiet,
+                                onAudioStarted: () => ref
+                                    .read(voiceStatusProvider.notifier)
+                                    .state = '正在说话…',
+                                onInteractionState: (state) {
+                                  if (mounted &&
+                                      ref.read(currentCharacterIdProvider) ==
+                                          character?.id &&
+                                      state != _interactionState) {
+                                    setState(() => _interactionState = state);
+                                  }
+                                },
+                              ))),
+                      Positioned(
+                          top: 18,
+                          left: 18,
+                          child: _StageLabel(
+                              icon: _studyMode
+                                  ? Icons.spa_outlined
+                                  : Icons.favorite_border,
+                              text: _studyMode ? '你的陪学搭子' : '此刻，陪着你')),
+                      Positioned(
+                          left: 18,
+                          bottom: 18,
+                          right: 170,
+                          child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: _StageLabel(
+                                  icon: voiceStatus == null
+                                      ? Icons.touch_app_outlined
+                                      : Icons.graphic_eq_rounded,
+                                  text: voiceStatus ?? '拖动转身 · Ctrl + 滚轮缩放'))),
+                      if (!_studyMode &&
+                          Platform.isWindows &&
+                          character != null)
+                        Positioned(
+                            right: 18,
+                            bottom: 18,
+                            child: HighFiveControl(
+                                key: ValueKey(character.id),
+                                state: _interactionState,
+                                enabled: !isSending && voiceStatus == null,
+                                onStart: _startHighFive,
+                                onCancel: _cancelHighFive)),
+                    ]))),
+            Positioned(
+                right: 16,
+                left: wide ? null : 16,
+                bottom: 16,
+                top: wide ? 0 : null,
+                width: wide ? sidebarWidth : null,
+                height: wide ? null : panelHeight,
+                child: ChatWheelRegion(
+                    controller: activeScroll,
+                    onModelZoom: _zoomModel,
+                    nativeScrolling: true,
+                    child: panel)),
+            if (_studyMode && _musicOpen)
+              Positioned(
+                  left: 28,
+                  top: _musicMinimized ? null : 12,
+                  height: _musicMinimized ? 208 : null,
+                  width: _musicMinimized
+                      ? min(
+                          360.0,
+                          wide
+                              ? constraints.maxWidth - sidebarWidth - 72
+                              : constraints.maxWidth - 56)
+                      : null,
+                  right: _musicMinimized
+                      ? null
+                      : wide
+                          ? sidebarWidth + 44
+                          : 28,
+                  bottom: wide ? 28 : panelHeight + 40,
+                  child: StudyMusicPanel(
+                      minimized: _musicMinimized,
+                      onToggleMinimized: () =>
+                          setState(() => _musicMinimized = !_musicMinimized),
+                      onClose: () => setState(() => _musicOpen = false))),
+          ]);
+        })),
+      ])),
     );
   }
 }
 
-/// 自定义可拖动滚动条：绑定聊天列表的 ScrollController。
-/// 因消息列表被 IgnorePointer 包裹（保证拖拽能穿透到 3D 模型），
-/// 系统 Scrollbar 无法交互，故在其上层单独绘制一个可拖动的滚动条。
-class _ChatScrollbar extends StatefulWidget {
-  const _ChatScrollbar({required this.controller});
-
-  final ScrollController controller;
-
+class _StageLabel extends StatelessWidget {
+  const _StageLabel({required this.icon, required this.text});
+  final IconData icon;
+  final String text;
   @override
-  State<_ChatScrollbar> createState() => _ChatScrollbarState();
-}
-
-class _ChatScrollbarState extends State<_ChatScrollbar> {
-  bool _dragging = false;
-  bool _hovering = false;
-
-  void _jumpToDy(double dy, double trackHeight) {
-    if (!widget.controller.hasClients) return;
-    final position = widget.controller.position;
-    final maxScroll = position.maxScrollExtent;
-    if (maxScroll <= 0 || !position.hasViewportDimension) return;
-    final viewport = position.viewportDimension;
-    final contentHeight = viewport + maxScroll;
-    final thumbHeight =
-        (viewport / contentHeight * trackHeight).clamp(36.0, trackHeight);
-    final range = trackHeight - thumbHeight;
-    if (range <= 0) return;
-    final f = ((dy - thumbHeight / 2) / range).clamp(0.0, 1.0);
-    widget.controller.jumpTo(f * maxScroll);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // MouseRegion/GestureDetector 只在 hover/drag 状态变化时重建；
-    // 滚动位置变化由 _ThumbPainter 通过 repaint: controller 监听，只触发 paint，不重建 widget
-    final visible = _dragging || _hovering;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final trackHeight = constraints.maxHeight;
-        return MouseRegion(
-          onEnter: (_) => setState(() => _hovering = true),
-          onExit: (_) => setState(() => _hovering = false),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: (d) => _jumpToDy(d.localPosition.dy, trackHeight),
-            onVerticalDragStart: (d) {
-              setState(() => _dragging = true);
-              _jumpToDy(d.localPosition.dy, trackHeight);
-            },
-            onVerticalDragUpdate: (d) =>
-                _jumpToDy(d.localPosition.dy, trackHeight),
-            onVerticalDragEnd: (_) => setState(() => _dragging = false),
-            onVerticalDragCancel: () => setState(() => _dragging = false),
-            child: CustomPaint(
-              painter: _ThumbPainter(
-                controller: widget.controller,
-                visible: visible,
-              ),
-              child: const SizedBox.expand(),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// 滚动条滑块绘制器：以 ScrollController 为 repaint 监听，
-/// 滚动时只触发 paint（不触发 widget 重建），开销极低。
-class _ThumbPainter extends CustomPainter {
-  _ThumbPainter({required this.controller, required this.visible})
-      : super(repaint: controller);
-
-  final ScrollController controller;
-  final bool visible;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (!controller.hasClients) return;
-    final position = controller.position;
-    final maxScroll = position.maxScrollExtent;
-    if (maxScroll <= 0 || !position.hasViewportDimension) return;
-
-    final trackHeight = size.height;
-    final viewport = position.viewportDimension;
-    final contentHeight = viewport + maxScroll;
-    final thumbHeight =
-        (viewport / contentHeight * trackHeight).clamp(36.0, trackHeight);
-    final scrollFraction =
-        maxScroll == 0 ? 0.0 : (position.pixels / maxScroll).clamp(0.0, 1.0);
-    final thumbTop = scrollFraction * (trackHeight - thumbHeight);
-    final thumbWidth = visible ? 8.0 : 6.0;
-
-    final rect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(
-          size.width - thumbWidth - 3, thumbTop, thumbWidth, thumbHeight),
-      const Radius.circular(4),
-    );
-    final paint = Paint()
-      ..color = Colors.white.withOpacity(visible ? 0.85 : 0.4)
-      ..style = PaintingStyle.fill;
-    canvas.drawRRect(rect, paint);
-  }
-
-  @override
-  bool shouldRepaint(_ThumbPainter old) => old.visible != visible;
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+            color: Colors.black.withOpacity(.32),
+            borderRadius: BorderRadius.circular(14)),
+        child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 15, color: Colors.white.withOpacity(.85)),
+              const SizedBox(width: 7),
+              Flexible(
+                  child: Text(text,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.white, height: 1.4))),
+            ])),
+      );
 }
 
 /// Typing indicator shown while waiting for AI response
@@ -724,7 +811,7 @@ class _TypingIndicatorState extends State<_TypingIndicator>
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               gradient: LinearGradient(
-                  colors: [Color(0xFFFF69B4), Color(0xFFFFB6C1)]),
+                  colors: [Color(0xFF527564), Color(0xFF8DA88D)]),
             ),
             child: const Icon(Icons.favorite, size: 16, color: Colors.white),
           ),

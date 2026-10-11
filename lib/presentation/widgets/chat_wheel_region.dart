@@ -9,11 +9,13 @@ class ChatWheelRegion extends StatelessWidget {
     required this.controller,
     required this.onModelZoom,
     required this.child,
+    this.nativeScrolling = false,
   });
 
   final ScrollController controller;
   final ValueChanged<double> onModelZoom;
   final Widget child;
+  final bool nativeScrolling;
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is! PointerScrollEvent || event.scrollDelta.dy == 0) return;
@@ -22,6 +24,7 @@ class ChatWheelRegion extends StatelessWidget {
       onModelZoom(delta);
       return;
     }
+    if (nativeScrolling) return;
     if (!controller.hasClients) return;
     final position = controller.position;
     controller.jumpTo((position.pixels + delta)
@@ -33,6 +36,27 @@ class ChatWheelRegion extends StatelessWidget {
   Widget build(BuildContext context) => Listener(
         behavior: HitTestBehavior.translucent,
         onPointerSignal: _onPointerSignal,
-        child: child,
+        child: nativeScrolling
+            ? ScrollConfiguration(
+                behavior: const _CompanionScrollBehavior(), child: child)
+            : child,
       );
+}
+
+class _CompanionScrollBehavior extends MaterialScrollBehavior {
+  const _CompanionScrollBehavior();
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const _ControlScrollPhysics();
+}
+
+class _ControlScrollPhysics extends ClampingScrollPhysics {
+  const _ControlScrollPhysics({super.parent});
+  @override
+  _ControlScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _ControlScrollPhysics(parent: buildParent(ancestor));
+  @override
+  bool shouldAcceptUserOffset(ScrollMetrics position) =>
+      !HardwareKeyboard.instance.isControlPressed &&
+      super.shouldAcceptUserOffset(position);
 }

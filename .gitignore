@@ -26,11 +26,13 @@ migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+**/.dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+build/
+**/build/
 
 # Symbolication related
 app.*.symbols
@@ -42,6 +44,39 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android keystores & credentials
+*.aab
+*.keystore
+*.jks
+key.properties
+local.properties
+
+# Visual Studio / Windows Desktop
+.vs/
+*.vcxproj.user
+
+# AI & Modern Editor Caches
+.codebuddy/
+.cursor/
+.windsurf/
+
+# Python tool caches (tool/ directory)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node.js caches (test/ directory)
+node_modules/
+npm-debug.log*
+
+# System & temporary files
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak
 
 # Local API secrets (do NOT commit)
 lib/core/secrets.dart

@@ -1,6 +1,7 @@
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:ai_girlfriend/presentation/widgets/chat_input.dart';
+import 'package:ai_girlfriend/core/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -199,9 +200,29 @@ void main() {
           .color;
     }
 
-    expect(borderColor(), const Color(0xFFFF69B4));
+    expect(borderColor(), AppTheme.primaryColor);
     otherFocus.requestFocus();
     await tester.pump();
     expect(borderColor(), Colors.transparent);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+  testWidgets(
+      'external controller can fill a draft and survives input disposal',
+      (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    final sent = <String>[];
+    await mount(tester,
+        input: ChatInput(controller: controller, onSend: sent.add));
+    controller.text = 'shared draft';
+    await tester.pump();
+    expect(find.text('shared draft'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    expect(sent, ['shared draft']);
+    expect(controller.text, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    controller.text = 'still owned by the page';
+    expect(controller.text, 'still owned by the page');
   }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 }

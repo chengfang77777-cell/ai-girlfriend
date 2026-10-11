@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../core/theme.dart';
 
 /// Message type enum for chat bubble styling
 enum MessageType {
@@ -9,10 +10,8 @@ enum MessageType {
 
 /// Chat bubble widget for displaying chat messages.
 ///
-/// User messages: right-aligned, pink (#FF69B4) background, white text.
-/// AI messages: left-aligned, light grey (#F5F5F5) background, dark text,
-/// small avatar icon. Shows HH:mm timestamp. Max width 75% of screen.
-/// Long press for copy/delete menu.
+/// Messages size themselves against their chat panel, with a timestamp and
+/// a long-press / secondary-click menu for copy and delete.
 class ChatBubble extends StatefulWidget {
   final String message;
   final MessageType type;
@@ -52,7 +51,8 @@ class _ChatBubbleState extends State<ChatBubble>
     _slideAnim = Tween<Offset>(
       begin: const Offset(0, 0.3),
       end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic));
+    ).animate(
+        CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic));
     _animController.forward();
   }
 
@@ -66,16 +66,16 @@ class _ChatBubbleState extends State<ChatBubble>
     return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 
-  void _handleLongPress() {
+  void _showActions(Offset globalPosition) {
     HapticFeedback.mediumImpact();
-    final isUser = widget.type == MessageType.user;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final position = overlay.globalToLocal(globalPosition);
     showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(
-        isUser ? MediaQuery.of(context).size.width * 0.7 : 50,
-        100,
-        isUser ? MediaQuery.of(context).size.width : 200,
-        150,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(position.dx, position.dy, 0, 0),
+        Offset.zero & overlay.size,
       ),
       items: [
         PopupMenuItem<String>(
@@ -100,6 +100,7 @@ class _ChatBubbleState extends State<ChatBubble>
         ),
       ],
     ).then((value) {
+      if (!mounted) return;
       if (value == 'copy') {
         Clipboard.setData(ClipboardData(text: widget.message));
         ScaffoldMessenger.of(context).showSnackBar(
@@ -119,116 +120,69 @@ class _ChatBubbleState extends State<ChatBubble>
   @override
   Widget build(BuildContext context) {
     final isUser = widget.type == MessageType.user;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final maxBubbleWidth = screenWidth * 0.75;
-
-    return FadeTransition(
-      opacity: _fadeAnim,
-      child: SlideTransition(
-        position: _slideAnim,
-        child: Padding(
-          padding: EdgeInsets.only(
-            left: isUser ? screenWidth * 0.25 : 0,
-            right: isUser ? 0 : screenWidth * 0.25,
-            bottom: 4,
-          ),
-          child: GestureDetector(
-            onLongPress: _handleLongPress,
-            child: Column(
-              crossAxisAlignment:
-                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                Container(
-                  constraints: BoxConstraints(maxWidth: maxBubbleWidth),
-                  margin: EdgeInsets.only(
-                    top: 4,
-                    bottom: 2,
-                    left: isUser ? 0 : 8,
-                    right: isUser ? 8 : 0,
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+    return LayoutBuilder(builder: (context, constraints) {
+      final panelWidth = constraints.hasBoundedWidth
+          ? constraints.maxWidth
+          : MediaQuery.sizeOf(context).width;
+      return FadeTransition(
+        opacity: _fadeAnim,
+        child: SlideTransition(
+          position: _slideAnim,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Align(
+              alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+              child: GestureDetector(
+                onLongPressStart: (details) =>
+                    _showActions(details.globalPosition),
+                onSecondaryTapDown: (details) =>
+                    _showActions(details.globalPosition),
+                child: Container(
+                  constraints:
+                      BoxConstraints(maxWidth: (panelWidth - 24) * 0.88),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
-                    gradient: isUser
-                        ? LinearGradient(
-                            begin: Alignment.topLeft, end: Alignment.bottomRight,
-                            colors: [const Color(0xFFFF69B4).withOpacity(0.65), const Color(0xFFFF85A1).withOpacity(0.65)],
-                          )
-                        : null,
-                    color: isUser ? null : const Color(0xFFF5F5F5).withOpacity(0.5),
+                    color: isUser ? AppTheme.bubbleUser : AppTheme.bubbleAi,
                     borderRadius: BorderRadius.only(
-                      topLeft: const Radius.circular(20),
-                      topRight: const Radius.circular(20),
-                      bottomLeft: isUser ? const Radius.circular(20) : const Radius.circular(6),
-                      bottomRight: isUser ? const Radius.circular(6) : const Radius.circular(20),
+                      topLeft: const Radius.circular(18),
+                      topRight: const Radius.circular(18),
+                      bottomLeft: Radius.circular(isUser ? 18 : 5),
+                      bottomRight: Radius.circular(isUser ? 5 : 18),
                     ),
-                    border: isUser
-                        ? Border.all(color: Colors.white.withOpacity(0.2), width: 1)
-                        : (widget.isSelected
-                            ? Border.all(color: Colors.blue, width: 2)
-                            : null),
-                    boxShadow: [
-                      BoxShadow(
-                        color: isUser ? const Color(0xFFFF69B4).withOpacity(0.12) : Colors.black.withOpacity(0.02),
-                        blurRadius: isUser ? 8 : 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
+                    border: Border.all(
+                      color: widget.isSelected
+                          ? AppTheme.primaryColor
+                          : AppTheme.border,
+                      width: widget.isSelected ? 2 : 1,
+                    ),
                   ),
-                  child: Row(
+                  child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (!isUser) ...[
-                        Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFF69B4).withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(
-                            Icons.favorite,
-                            size: 16,
-                            color: Color(0xFFFF69B4),
-                          ),
+                      Text(
+                        widget.message,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: AppTheme.textPrimary,
+                          height: 1.65,
                         ),
-                        const SizedBox(width: 8),
-                      ],
-                      Flexible(
-                        child: Column(
-                          crossAxisAlignment: isUser
-                              ? CrossAxisAlignment.end
-                              : CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              widget.message,
-                              style: TextStyle(
-                                fontSize: 15,
-                                color: isUser ? Colors.white : Colors.black87,
-                                height: 1.4,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _formatTime(widget.timestamp),
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: isUser
-                                    ? Colors.white.withOpacity(0.7)
-                                    : Colors.grey[500],
-                              ),
-                            ),
-                          ],
-                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _formatTime(widget.timestamp),
+                        style: const TextStyle(
+                            fontSize: 10, color: AppTheme.textSecondary),
                       ),
                     ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 }
